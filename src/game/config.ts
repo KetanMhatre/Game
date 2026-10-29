@@ -34,6 +34,7 @@ export type WeaponId = 'cannon' | 'torpedo' | 'mine' | 'tidal' | 'shield' | 'tur
 export interface WeaponDef {
   id: WeaponId;
   name: string;
+  /** Key into ui/icons.ts (SVG). Emoji are avoided: newer ones render as boxes on older Windows/ChromeOS. */
   icon: string;
   ammo: number;
   color: number;
@@ -42,12 +43,12 @@ export interface WeaponDef {
 }
 
 export const WEAPONS: Record<WeaponId, WeaponDef> = {
-  cannon: { id: 'cannon', name: 'Coconut Cannon', icon: '🥥', ammo: 3, color: 0x8b5a2b, weight: 30 },
-  torpedo: { id: 'torpedo', name: 'Puffer Torpedo', icon: '🐡', ammo: 1, color: 0xffcc33, weight: 18 },
-  mine: { id: 'mine', name: 'Urchin Mine', icon: '🦔', ammo: 2, color: 0x6a3d9a, weight: 18 },
-  tidal: { id: 'tidal', name: 'Tidal Splash', icon: '🌊', ammo: 1, color: 0x4fc3f7, weight: 12 },
-  shield: { id: 'shield', name: 'Bubble Shield', icon: '🫧', ammo: 1, color: 0x9be7ff, weight: 10 },
-  turbo: { id: 'turbo', name: 'Turbo Paddle', icon: '💨', ammo: 1, color: 0xffffff, weight: 12 },
+  cannon: { id: 'cannon', name: 'Coconut Cannon', icon: 'cannon', ammo: 3, color: 0x8b5a2b, weight: 30 },
+  torpedo: { id: 'torpedo', name: 'Puffer Torpedo', icon: 'torpedo', ammo: 1, color: 0xffcc33, weight: 18 },
+  mine: { id: 'mine', name: 'Urchin Mine', icon: 'mine', ammo: 2, color: 0x6a3d9a, weight: 18 },
+  tidal: { id: 'tidal', name: 'Tidal Splash', icon: 'tidal', ammo: 1, color: 0x4fc3f7, weight: 12 },
+  shield: { id: 'shield', name: 'Bubble Shield', icon: 'shield', ammo: 1, color: 0x9be7ff, weight: 10 },
+  turbo: { id: 'turbo', name: 'Turbo Paddle', icon: 'turbo', ammo: 1, color: 0xffffff, weight: 12 },
 };
 
 export const WEAPON_TUNING = {
@@ -85,8 +86,9 @@ export interface MapDef {
   waveAmp: number;
   waterShallow: number;
   waterDeep: number;
-  sky: number;
-  fog: number;
+  skyTop: number;
+  /** Also the fog colour, so distant land melts into the sky. */
+  skyHorizon: number;
   sand: number;
   grass: number;
   islandCount: number;
@@ -104,12 +106,12 @@ export const MAPS: Record<MapId, MapDef> = {
     radius: 48,
     shoreNoise: 0.12,
     waveAmp: 0.08,
-    waterShallow: 0x5fd3b0,
-    waterDeep: 0x1f8a78,
-    sky: 0xbfe8ff,
-    fog: 0xcdeedd,
-    sand: 0xc9b37a,
-    grass: 0x7fbf4d,
+    waterShallow: 0x86ead0,
+    waterDeep: 0x249a8c,
+    skyTop: 0x5fb4f0,
+    skyHorizon: 0xd8f1ff,
+    sand: 0xead39a,
+    grass: 0x84c84c,
     islandCount: 4,
     rockCount: 8,
     pickupCount: 8,
@@ -123,12 +125,12 @@ export const MAPS: Record<MapId, MapDef> = {
     radius: 68,
     shoreNoise: 0.18,
     waveAmp: 0.18,
-    waterShallow: 0x4fb7d8,
-    waterDeep: 0x1b5f8f,
-    sky: 0xa9d8ff,
-    fog: 0xb8daf0,
-    sand: 0xd8c28c,
-    grass: 0x5f9e45,
+    waterShallow: 0x74d9f2,
+    waterDeep: 0x1a6aa6,
+    skyTop: 0x4aa3e8,
+    skyHorizon: 0xcfeaff,
+    sand: 0xe4cf98,
+    grass: 0x6db34a,
     islandCount: 7,
     rockCount: 10,
     pickupCount: 11,
@@ -142,12 +144,12 @@ export const MAPS: Record<MapId, MapDef> = {
     radius: 88,
     shoreNoise: 0.1,
     waveAmp: 0.45,
-    waterShallow: 0x3cc8e6,
-    waterDeep: 0x0e4c8a,
-    sky: 0x8fd0ff,
-    fog: 0xa6dcf5,
-    sand: 0xf0d9a0,
-    grass: 0x8cc152,
+    waterShallow: 0x5ff0f0,
+    waterDeep: 0x0d5aa8,
+    skyTop: 0x3c9ef0,
+    skyHorizon: 0xc8f0ff,
+    sand: 0xf8e4ae,
+    grass: 0x9bcf58,
     islandCount: 9,
     rockCount: 12,
     pickupCount: 14,
@@ -156,7 +158,8 @@ export const MAPS: Record<MapId, MapDef> = {
   },
 };
 
-export const PLAYER_COLORS = [0xff5252, 0x40c4ff, 0xffd740, 0x69f0ae, 0xe040fb, 0xff9100, 0xffffff, 0x536dfe];
+/** Boat trim, flag, paddle blades and sailor shirt stripes. */
+export const PLAYER_COLORS = [0xff4d5e, 0x3fa9ff, 0xffc93c, 0x4cd97b, 0xb765ff, 0xff8c2e, 0xff6fb5, 0x2ad4c9];
 
 export const BOT_NAMES = [
   'Captain Kelp', 'Barnacle Bo', 'Salty Sue', 'Admiral Nut', 'Paddles', 'Cpt. Crunch', 'Driftwood',

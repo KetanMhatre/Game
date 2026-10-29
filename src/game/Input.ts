@@ -1,4 +1,6 @@
 import type { BoatInput } from './Boat';
+import { WEAPONS, type WeaponId } from './config';
+import { icon } from '../ui/icons';
 
 /** Keyboard + mouse + touch joystick, merged into one BoatInput. */
 export class Input {
@@ -15,10 +17,11 @@ export class Input {
   private base: HTMLDivElement;
   private knob: HTMLDivElement;
   private fireBtn: HTMLDivElement;
+  private fireWeapon: WeaponId | null | undefined = undefined;
   enabled = false;
   onPause: () => void = () => {};
 
-  constructor(canvas: HTMLCanvasElement, uiRoot: HTMLElement) {
+  constructor(canvas: HTMLCanvasElement, private uiRoot: HTMLElement) {
     window.addEventListener('keydown', (e) => {
       if (e.code === 'Escape' || e.code === 'KeyP') {
         this.onPause();
@@ -88,12 +91,17 @@ export class Input {
   }
 
   showTouch(show: boolean): void {
-    this.root.classList.toggle('hidden', !(show && this.isTouch));
+    const on = show && this.isTouch;
+    this.root.classList.toggle('hidden', !on);
+    // The fire button shows the held weapon, so the HUD weapon slot is redundant on touch.
+    this.uiRoot.classList.toggle('touch-on', on);
   }
 
-  setFireIcon(icon: string | null): void {
-    this.fireBtn.textContent = icon ?? 'FIRE';
-    this.fireBtn.classList.toggle('empty', !icon);
+  setFireIcon(weapon: WeaponId | null): void {
+    if (weapon === this.fireWeapon) return;
+    this.fireWeapon = weapon;
+    this.fireBtn.innerHTML = weapon ? icon(WEAPONS[weapon].icon) : 'FIRE';
+    this.fireBtn.classList.toggle('empty', !weapon);
   }
 
   private moveJoy(x: number, y: number): void {

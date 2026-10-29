@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { BOAT, MAX_HP, WEAPONS, type WeaponId } from './config';
-import { BoatModel } from './BoatModel';
+import { BoatModel, RIDE_HEIGHT } from './BoatModel';
+import type { SpeciesId } from './Character';
 import type { Arena } from './Arena';
 import { clamp, damp } from './util';
 import { waveHeight } from './waves';
@@ -47,6 +48,8 @@ export class Boat {
   lastHitT = 0;
   /** Per-target cooldown for turbo ramming damage. */
   ramCooldown = new Map<number, number>();
+  /** Name tags are hidden for the menu's background boats. */
+  labelEnabled = true;
 
   private pitch = 0;
   private roll = 0;
@@ -64,16 +67,17 @@ export class Boat {
     readonly name: string,
     readonly color: number,
     readonly isPlayer: boolean,
+    readonly species: SpeciesId,
   ) {
-    this.model = new BoatModel(color);
+    this.model = new BoatModel(color, species);
     this.labelCanvas = document.createElement('canvas');
     this.labelCanvas.width = 256;
-    this.labelCanvas.height = 72;
+    this.labelCanvas.height = 80;
     this.labelTex = new THREE.CanvasTexture(this.labelCanvas);
     this.labelTex.colorSpace = THREE.SRGBColorSpace;
     this.label = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.labelTex, depthWrite: false, transparent: true }));
-    this.label.scale.set(4, 1.125, 1);
-    this.label.position.y = 2.9;
+    this.label.scale.set(3.6, 1.125, 1);
+    this.label.position.y = 2.75;
     this.label.renderOrder = 10;
     this.model.root.add(this.label);
     this.drawLabel();
@@ -139,6 +143,7 @@ export class Boat {
       this.lastHitBy = from;
       this.lastHitT = 4;
     }
+    this.model.character.hit();
     this.drawLabel();
     if (this.hp <= 0) {
       this.alive = false;
@@ -249,40 +254,75 @@ export class Boat {
     const k = damp(6, dt);
     this.pitch += (targetPitch - this.pitch) * k;
     this.roll += (targetRoll - this.roll) * k;
-    this.y = h + 0.42;
+    this.y = h + RIDE_HEIGHT;
 
     const root = this.model.root;
     root.position.set(this.x, this.y, this.z);
     root.rotation.y = this.heading;
     this.model.tilt.rotation.set(this.pitch, 0, this.roll);
-    this.model.animate(dt, vF, Math.abs(thr), time);
+    this.model.animate(dt, vF, Math.abs(thr), this.steer, time);
 
+    // Bubble shield: solid while the power-up lasts (fading out at the end), soft pulse for spawn protection.
     const sh = this.model.shield;
-    sh.visible = this.shieldT > 0 || (this.protectT > 0 && Math.floor(time * 10) % 2 === 0);
-    if (sh.visible) sh.rotation.y += dt;
+    sh.visible = this.shieldT > 0 || this.protectT > 0;
+    if (sh.visible) {
+      const o = this.shieldT > 0 ? Math.min(1, this.shieldT / 0.6) : 0.35 + 0.25 * Math.sin(time * 12);
+      this.model.setShieldOpacity(o);
+      sh.rotation.y += dt;
+    }
 
     return impact;
   }
 
+  /** Name tag + health pips floating above rival boats (chunky outlined text, matching the HUD). */
   drawLabel(): void {
     const c = this.labelCanvas.getContext('2d');
     if (!c) return;
-    c.clearRect(0, 0, 256, 72);
-    this.label.visible = !this.isPlayer;
-    c.font = 'bold 26px system-ui, sans-serif';
+    const W = 256;
+    c.clearRect(0, 0, W, 80);
+    this.label.visible = !this.isPlayer && this.labelEnabled;
+    c.font = '26px "Lilita One", "Arial Black", sans-serif';
     c.textAlign = 'center';
-    c.lineWidth = 6;
-    c.strokeStyle = 'rgba(0,0,0,0.6)';
-    c.strokeText(this.name, 128, 28);
-    c.fillStyle = '#' + this.color.toString(16).padStart(6, '0');
-    c.fillText(this.name, 128, 28);
-    const w = 30, gap = 8, total = MAX_HP * w + (MAX_HP - 1) * gap;
+    c.textBaseline = 'middle';
+    c.lineJoin = 'round';
+    c.lineWidth = 7;
+    c.strokeStyle = '#0b2a45';
+    c.strokeText(this.name, W / 2, 24);
+    c.fillStyle = '#ffffff';
+    c.fillText(this.name, W / 2, 24);
+    const w = 32, gap = 6, total = MAX_HP * w + (MAX_HP - 1) * gap;
+    const x0 = W / 2 - total / 2;
+    c.fillStyle = '#0b2a45';
+    roundRect(c, x0 - 5, 44, total + 10, 22, 11);
+    c.fill();
     for (let i = 0; i < MAX_HP; i++) {
-      c.fillStyle = 'rgba(0,0,0,0.55)';
-      c.fillRect(128 - total / 2 + i * (w + gap) - 2, 42, w + 4, 16);
-      c.fillStyle = i < this.hp ? '#ff5252' : '#555';
-      c.fillRect(128 - total / 2 + i * (w + gap), 44, w, 12);
+      c.fillStyle = i < this.hp ? '#ff4d6d' : '#28415a';
+      roundRect(c, x0 + i * (w + gap), 48, w, 14, 7);
+      c.fill();
+      if (i < this.hp) {
+        c.fillStyle = 'rgba(255,255,255,0.45)';
+        roundRect(c, x0 + i * (w + gap) + 4, 50, w - 8, 4, 2);
+        c.fill();
+      }
     }
+    // Player-colour dot so you can match tags to flags.
+    c.fillStyle = '#' + this.color.toString(16).padStart(6, '0');
+    c.beginPath();
+    c.arc(x0 - 16, 55, 8, 0, Math.PI * 2);
+    c.fill();
+    c.lineWidth = 3;
+    c.strokeStyle = '#0b2a45';
+    c.stroke();
     this.labelTex.needsUpdate = true;
   }
+}
+
+function roundRect(c: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number): void {
+  c.beginPath();
+  c.moveTo(x + r, y);
+  c.arcTo(x + w, y, x + w, y + h, r);
+  c.arcTo(x + w, y + h, x, y + h, r);
+  c.arcTo(x, y + h, x, y, r);
+  c.arcTo(x, y, x + w, y, r);
+  c.closePath();
 }

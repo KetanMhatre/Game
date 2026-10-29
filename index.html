@@ -8,10 +8,24 @@
     <!-- CrazyGames SDK v3. Safe to keep when hosting elsewhere: the wrapper no-ops outside CrazyGames. -->
     <script src="https://sdk.crazygames.com/crazygames-sdk-v3.js"></script>
     <link rel="stylesheet" href="./src/style.css" />
+    <!-- Inline so the splash shows instantly, before any script or stylesheet arrives. -->
+    <style>
+      #boot { position: fixed; inset: 0; z-index: 10; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 22px;
+        background: radial-gradient(ellipse at 50% 40%, #6fd3f7 0%, #1d86c4 60%, #0f5d8f 100%); transition: opacity 0.4s; }
+      #boot.done { opacity: 0; pointer-events: none; }
+      #boot .bl { font: 900 54px/0.9 'Arial Black', Impact, sans-serif; color: #ffb348; text-align: center; letter-spacing: 1px;
+        text-shadow: 0 5px 0 #0b2a45, 3px 3px 0 #0b2a45, -3px 3px 0 #0b2a45, 3px -3px 0 #0b2a45, -3px -3px 0 #0b2a45; }
+      #boot .bl span { color: #4fd2ff; font-size: 62px; }
+      #boot .bar { width: 220px; height: 18px; border-radius: 9px; border: 3px solid #0b2a45; background: #0b2a45; overflow: hidden; }
+      #boot .bar i { display: block; height: 100%; width: 40%; border-radius: 6px; background: linear-gradient(180deg, #ffe066, #ffb41f);
+        animation: boot-slide 1s ease-in-out infinite alternate; }
+      @keyframes boot-slide { from { transform: translateX(-10%); } to { transform: translateX(160%); } }
+    </style>
   </head>
   <body>
     <canvas id="game"></canvas>
     <div id="ui"></div>
+    <div id="boot"><div class="bl">NUTSHELL<br /><span>NAVY</span></div><div class="bar"><i></i></div></div>
     <script type="module" src="./src/main.ts"></script>
   </body>
 </html>

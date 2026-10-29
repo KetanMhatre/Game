@@ -1,9 +1,13 @@
 import { MAPS, MAX_HP, PLAYER_COLORS, WEAPONS, type MapId, type WeaponId } from '../game/config';
+import { SPECIES, type SpeciesId } from '../game/Character';
+import type { QualitySetting } from '../game/Game';
+import { icon, medal } from './icons';
 
 export interface PlayConfig {
   name: string;
   color: number;
   map: MapId;
+  character: SpeciesId;
 }
 
 export interface ScoreRow {
@@ -25,38 +29,53 @@ export interface HudState {
 
 const hex = (c: number) => '#' + c.toString(16).padStart(6, '0');
 const esc = (s: string) => s.replace(/[&<>"']/g, (ch) => `&#${ch.charCodeAt(0)};`);
+const ordinal = (n: number) => {
+  const s = n % 100 >= 11 && n % 100 <= 13 ? 'th' : ['th', 'st', 'nd', 'rd'][n % 10] ?? 'th';
+  return `${n}<sup>${s}</sup>`;
+};
+const QUALITY_LABEL: Record<QualitySetting, string> = { auto: 'Auto', high: 'High', low: 'Low' };
 
 export class UI {
   onPlay: (cfg: PlayConfig) => void = () => {};
   onMapSelect: (map: MapId) => void = () => {};
+  /** Character or colour changed in the menu (updates the 3D showcase). */
+  onPreview: (cfg: PlayConfig) => void = () => {};
   onResume: () => void = () => {};
   onQuit: () => void = () => {};
   onAgain: () => void = () => {};
   onPauseClick: () => void = () => {};
   onMuteToggle: () => boolean = () => false;
+  onQualityChange: (q: QualitySetting) => void = () => {};
 
   private menu: HTMLDivElement;
   private hud: HTMLDivElement;
   private pause: HTMLDivElement;
   private end: HTMLDivElement;
   private center: HTMLDivElement;
+  private toast: HTMLDivElement;
+  private vignette: HTMLDivElement;
   private feedEl!: HTMLDivElement;
   private boardEl!: HTMLDivElement;
-  private timerEl!: HTMLDivElement;
-  private heartsEl!: HTMLDivElement;
+  private rankEl!: HTMLDivElement;
+  private timerEl!: HTMLSpanElement;
+  private timerBox!: HTMLDivElement;
+  private hpEl!: HTMLDivElement;
   private weaponEl!: HTMLDivElement;
-  private killsEl!: HTMLDivElement;
-  private vignette: HTMLDivElement;
   private centerTimer = 0;
+  private toastTimer = 0;
   private cfg: PlayConfig;
   private lastBoard = '';
   private lastWeapon = '';
+  private lastHp = -1;
+  private lastRank = '';
+  private quality: QualitySetting = 'auto';
 
   constructor(private root: HTMLElement, saved: Partial<PlayConfig>, private stats: { wins: number; bestKills: number }) {
     this.cfg = {
       name: saved.name || 'Captain ' + Math.floor(100 + Math.random() * 900),
-      color: saved.color ?? PLAYER_COLORS[0],
-      map: saved.map ?? 'pond',
+      color: PLAYER_COLORS.includes(saved.color as number) ? (saved.color as number) : PLAYER_COLORS[0],
+      map: saved.map && MAPS[saved.map] ? saved.map : 'pond',
+      character: SPECIES.some((s) => s.id === saved.character) ? (saved.character as SpeciesId) : 'frog',
     };
     this.vignette = this.el('div', 'vignette');
     this.menu = this.el('div', 'screen menu');
@@ -64,9 +83,9 @@ export class UI {
     this.pause = this.el('div', 'screen overlay hidden');
     this.end = this.el('div', 'screen overlay hidden');
     this.center = this.el('div', 'center-msg');
+    this.toast = this.el('div', 'toast');
     this.buildMenu();
     this.buildHud();
-    this.buildPause();
   }
 
   private el(tag: string, cls: string): HTMLDivElement {
@@ -92,46 +111,70 @@ export class UI {
     if (input) input.value = name;
   }
 
-  private statsHtml(): string {
-    return `🏆 Wins <b>${this.stats.wins}</b> &nbsp;·&nbsp; 💥 Best <b>${this.stats.bestKills}</b> sinks`;
+  setMuted(muted: boolean): void {
+    this.root.querySelectorAll('.mute-btn').forEach((b) => (b.innerHTML = icon(muted ? 'soundOff' : 'soundOn')));
   }
+
+  private statsHtml(): string {
+    return `<span class="ic">${icon('trophy')}</span> Wins <b>${this.stats.wins}</b><span class="sep"></span><span class="ic">${icon('sink')}</span> Best <b>${this.stats.bestKills}</b> sinks`;
+  }
+
+  private muteButton(): string {
+    return `<button class="icon-btn mute-btn" aria-label="Sound">${icon('soundOn')}</button>`;
+  }
+
+  private bindMute(scope: HTMLElement): void {
+    scope.querySelectorAll<HTMLButtonElement>('.mute-btn').forEach((b) =>
+      b.addEventListener('click', () => this.setMuted(this.onMuteToggle())),
+    );
+  }
+
+  // ---------------------------------------------------------------- menu
 
   private buildMenu(): void {
     const maps = Object.values(MAPS)
       .map(
         (m) => `<button class="map-card ${m.id === this.cfg.map ? 'sel' : ''}" data-map="${m.id}" style="--water:${hex(m.waterShallow)};--deep:${hex(m.waterDeep)}">
-          <span class="map-name">${m.name}</span><span class="map-blurb">${m.blurb}</span></button>`,
+          <span class="map-ic">${icon(m.id)}</span><span class="map-name">${m.name}</span></button>`,
       )
       .join('');
     const colors = PLAYER_COLORS.map(
-      (c) => `<button class="swatch ${c === this.cfg.color ? 'sel' : ''}" data-color="${c}" style="background:${hex(c)}" aria-label="colour"></button>`,
+      (c) => `<button class="swatch ${c === this.cfg.color ? 'sel' : ''}" data-color="${c}" style="--c:${hex(c)}" aria-label="Boat colour"></button>`,
     ).join('');
     this.menu.innerHTML = `
-      <div class="menu-card main-menu">
+      <div class="menu-card card">
         <div class="col">
-          <h1 class="logo">Nutshell<br/><span>Navy</span></h1>
-          <p class="tag">Paddle. Pick up. Sink 'em all.</p>
+          <h1 class="logo"><span class="l1">Nutshell</span><span class="l2">Navy</span></h1>
+          <p class="tag">Paddle. Pick up. Sink 'em all!</p>
           <label class="lbl">Captain name</label>
-          <input class="name-input" maxlength="14" value="${esc(this.cfg.name)}" />
-          <label class="lbl">Flag colour</label>
+          <input class="name-input" maxlength="14" value="${esc(this.cfg.name)}" spellcheck="false" />
+          <label class="lbl">Sailor</label>
+          <div class="picker">
+            <button class="arrow prev" aria-label="Previous sailor">${icon('left')}</button>
+            <div class="pick-name"></div>
+            <button class="arrow next" aria-label="Next sailor">${icon('right')}</button>
+          </div>
+          <label class="lbl">Boat colour</label>
           <div class="swatches">${colors}</div>
         </div>
         <div class="col">
           <label class="lbl">Waters</label>
           <div class="maps">${maps}</div>
-          <button class="btn play">▶ PLAY</button>
+          <button class="btn btn-play">PLAY</button>
           <div class="stats">${this.statsHtml()}</div>
           <div class="help">WASD / Arrows to paddle · Space or Click to fire · Esc to pause</div>
         </div>
-      </div>`;
+      </div>
+      <div class="menu-corner">${this.muteButton()}</div>`;
+
     const input = this.menu.querySelector<HTMLInputElement>('.name-input')!;
     input.addEventListener('input', () => (this.cfg.name = input.value.trim().slice(0, 14)));
-    // Don't let typing in the name field steer the attract-mode camera etc.
     input.addEventListener('keydown', (e) => e.stopPropagation());
     this.menu.querySelectorAll<HTMLButtonElement>('.swatch').forEach((b) =>
       b.addEventListener('click', () => {
         this.cfg.color = Number(b.dataset.color);
         this.menu.querySelectorAll('.swatch').forEach((s) => s.classList.toggle('sel', s === b));
+        this.onPreview({ ...this.cfg });
       }),
     );
     this.menu.querySelectorAll<HTMLButtonElement>('.map-card').forEach((b) =>
@@ -141,43 +184,52 @@ export class UI {
         this.onMapSelect(this.cfg.map);
       }),
     );
-    this.menu.querySelector('.play')!.addEventListener('click', () => {
+    const step = (d: number) => {
+      const i = SPECIES.findIndex((s) => s.id === this.cfg.character);
+      this.cfg.character = SPECIES[(i + d + SPECIES.length) % SPECIES.length].id;
+      this.renderPicker();
+      this.onPreview({ ...this.cfg });
+    };
+    this.menu.querySelector('.prev')!.addEventListener('click', () => step(-1));
+    this.menu.querySelector('.next')!.addEventListener('click', () => step(1));
+    this.menu.querySelector('.btn-play')!.addEventListener('click', () => {
       if (!this.cfg.name) this.cfg.name = 'Captain';
       this.onPlay({ ...this.cfg });
     });
+    this.bindMute(this.menu);
+    this.renderPicker();
   }
+
+  private renderPicker(): void {
+    const i = SPECIES.findIndex((s) => s.id === this.cfg.character);
+    const dots = SPECIES.map((_, k) => `<i class="${k === i ? 'on' : ''}"></i>`).join('');
+    this.menu.querySelector('.pick-name')!.innerHTML = `<span>${SPECIES[i].name}</span><span class="dots">${dots}</span>`;
+  }
+
+  // ---------------------------------------------------------------- HUD
 
   private buildHud(): void {
     this.hud.innerHTML = `
-      <div class="hud-top-left">
-        <div class="timer">3:00</div>
-        <div class="hud-btns"><button class="icon-btn pause-btn" aria-label="pause">⏸</button><button class="icon-btn mute-btn" aria-label="mute">🔊</button></div>
+      <div class="hud-tl">
+        <div class="rank-pill panel"></div>
+        <div class="board panel"></div>
       </div>
-      <div class="hud-kills">💥 <span>0</span></div>
-      <div class="board"></div>
+      <div class="hud-tc">
+        <div class="hp"><span class="hp-ic">${icon('heart')}</span><div class="hp-track panel"></div></div>
+        <div class="timer panel"><span class="t-ic">${icon('clock')}</span><span class="t-val">3:00</span></div>
+      </div>
+      <div class="hud-tr">${this.muteButton()}<button class="icon-btn pause-btn" aria-label="Pause">${icon('pause')}</button></div>
       <div class="feed"></div>
-      <div class="hud-bottom">
-        <div class="hearts"></div>
-        <div class="weapon empty"><span class="w-icon">·</span><span class="w-name">Grab a barrel!</span></div>
-      </div>`;
-    this.timerEl = this.hud.querySelector('.timer')!;
+      <div class="weapon-slot empty"></div>`;
+    this.rankEl = this.hud.querySelector('.rank-pill')!;
     this.boardEl = this.hud.querySelector('.board')!;
+    this.timerEl = this.hud.querySelector('.t-val')!;
+    this.timerBox = this.hud.querySelector('.timer')!;
+    this.hpEl = this.hud.querySelector('.hp-track')!;
     this.feedEl = this.hud.querySelector('.feed')!;
-    this.heartsEl = this.hud.querySelector('.hearts')!;
-    this.weaponEl = this.hud.querySelector('.weapon')!;
-    this.killsEl = this.hud.querySelector('.hud-kills span')!;
+    this.weaponEl = this.hud.querySelector('.weapon-slot')!;
     this.hud.querySelector('.pause-btn')!.addEventListener('click', () => this.onPauseClick());
-    const mute = this.hud.querySelector<HTMLButtonElement>('.mute-btn')!;
-    mute.addEventListener('click', () => {
-      mute.textContent = this.onMuteToggle() ? '🔇' : '🔊';
-    });
-  }
-
-  private buildPause(): void {
-    this.pause.innerHTML = `<div class="menu-card small"><h2>Paused</h2>
-      <button class="btn resume">▶ Resume</button><button class="btn ghost quit">Quit to menu</button></div>`;
-    this.pause.querySelector('.resume')!.addEventListener('click', () => this.onResume());
-    this.pause.querySelector('.quit')!.addEventListener('click', () => this.onQuit());
+    this.bindMute(this.hud);
   }
 
   showMenu(): void {
@@ -185,7 +237,8 @@ export class UI {
     this.hud.classList.add('hidden');
     this.pause.classList.add('hidden');
     this.end.classList.add('hidden');
-    this.center.textContent = '';
+    this.center.innerHTML = '';
+    this.toast.innerHTML = '';
   }
 
   showHud(): void {
@@ -194,29 +247,52 @@ export class UI {
     this.pause.classList.add('hidden');
     this.hud.classList.remove('hidden');
     this.feedEl.innerHTML = '';
-    this.lastBoard = '';
-    this.lastWeapon = '';
+    this.lastBoard = this.lastWeapon = this.lastRank = '';
+    this.lastHp = -1;
   }
 
-  showPause(show: boolean): void {
-    this.pause.classList.toggle('hidden', !show);
+  showPause(show: boolean, quality: QualitySetting): void {
+    this.quality = quality;
+    if (!show) {
+      this.pause.classList.add('hidden');
+      return;
+    }
+    this.pause.innerHTML = `<div class="card small">
+      <h2 class="title">Paused</h2>
+      <button class="btn btn-play resume">Resume</button>
+      <button class="btn btn-alt quality">Graphics: <b>${QUALITY_LABEL[this.quality]}</b></button>
+      <button class="btn btn-alt quit">Quit to menu</button></div>`;
+    this.pause.querySelector('.resume')!.addEventListener('click', () => this.onResume());
+    this.pause.querySelector('.quit')!.addEventListener('click', () => this.onQuit());
+    const qb = this.pause.querySelector<HTMLButtonElement>('.quality')!;
+    qb.addEventListener('click', () => {
+      const order: QualitySetting[] = ['auto', 'high', 'low'];
+      this.quality = order[(order.indexOf(this.quality) + 1) % order.length];
+      qb.innerHTML = `Graphics: <b>${QUALITY_LABEL[this.quality]}</b>`;
+      this.onQualityChange(this.quality);
+    });
+    this.pause.classList.remove('hidden');
   }
 
   showEnd(rows: ScoreRow[], playerRank: number): void {
     this.hud.classList.add('hidden');
-    this.center.textContent = '';
-    const medal = ['🥇', '🥈', '🥉'];
+    this.center.innerHTML = '';
+    this.toast.innerHTML = '';
     const title = playerRank === 1 ? 'Admiral of the Waves!' : playerRank <= 3 ? 'On the podium!' : 'Sunk but not forgotten';
     const list = rows
       .map(
-        (r, i) => `<div class="res-row ${r.isPlayer ? 'me' : ''}"><span class="rk">${medal[i] ?? i + 1}</span>
-        <span class="dot" style="background:${hex(r.color)}"></span><span class="nm">${esc(r.name)}</span>
-        <span class="k">💥 ${r.kills}</span><span class="d">☠ ${r.deaths}</span></div>`,
+        (r, i) => `<div class="res-row ${r.isPlayer ? 'me' : ''}" style="--d:${i * 0.05}s">
+          <span class="rk">${i < 3 ? medal(i + 1) : `<b>${i + 1}</b>`}</span>
+          <span class="dot" style="background:${hex(r.color)}"></span><span class="nm">${esc(r.name)}</span>
+          <span class="k">${icon('sink')}${r.kills}</span></div>`,
       )
       .join('');
-    this.end.innerHTML = `<div class="menu-card"><h2>${title}</h2><p class="tag">You placed <b>#${playerRank}</b></p>
+    this.end.innerHTML = `<div class="card end-card">
+      <div class="end-medal">${medal(playerRank)}</div>
+      <h2 class="title">${title}</h2>
+      <p class="tag">You placed <b>${ordinal(playerRank)}</b> of ${rows.length}</p>
       <div class="results">${list}</div>
-      <button class="btn again">↻ Play again</button><button class="btn ghost menu-btn">Change waters</button></div>`;
+      <div class="end-btns"><button class="btn btn-play again">Play again</button><button class="btn btn-alt menu-btn">Change waters</button></div></div>`;
     this.end.querySelector('.again')!.addEventListener('click', () => this.onAgain());
     this.end.querySelector('.menu-btn')!.addEventListener('click', () => this.onQuit());
     this.end.classList.remove('hidden');
@@ -225,44 +301,53 @@ export class UI {
   updateHud(s: HudState, playerRespawn: number | null): void {
     const t = Math.max(0, Math.ceil(s.timeLeft));
     this.timerEl.textContent = `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`;
-    this.timerEl.classList.toggle('low', t <= 15);
-    this.killsEl.textContent = String(s.kills);
+    this.timerBox.classList.toggle('low', t <= 15);
 
-    let hearts = '';
-    for (let i = 0; i < MAX_HP; i++) hearts += `<span class="heart ${i < s.hp ? '' : 'lost'}">❤</span>`;
-    if (this.heartsEl.innerHTML !== hearts) this.heartsEl.innerHTML = hearts;
+    if (s.hp !== this.lastHp) {
+      if (this.lastHp > s.hp) {
+        this.hpEl.classList.remove('hurt');
+        void this.hpEl.offsetWidth;
+        this.hpEl.classList.add('hurt');
+      }
+      this.lastHp = s.hp;
+      let segs = '';
+      for (let i = 0; i < MAX_HP; i++) segs += `<i class="${i < s.hp ? 'full' : ''}"></i>`;
+      this.hpEl.innerHTML = segs;
+    }
 
     const wkey = `${s.weapon}:${s.ammo}`;
     if (wkey !== this.lastWeapon) {
       this.lastWeapon = wkey;
       if (s.weapon) {
         const w = WEAPONS[s.weapon];
-        this.weaponEl.className = 'weapon pop';
-        this.weaponEl.innerHTML = `<span class="w-icon">${w.icon}</span><span class="w-name">${w.name}</span>${s.ammo > 1 ? `<span class="w-ammo">×${s.ammo}</span>` : ''}`;
+        this.weaponEl.className = 'weapon-slot pop';
+        this.weaponEl.innerHTML = `<div class="w-badge">${icon(w.icon)}${s.ammo > 1 ? `<span class="w-ammo">×${s.ammo}</span>` : ''}</div>
+          <div class="w-name">${w.name}</div>`;
       } else {
-        this.weaponEl.className = 'weapon empty';
-        this.weaponEl.innerHTML = `<span class="w-icon">·</span><span class="w-name">Grab a barrel!</span>`;
+        this.weaponEl.className = 'weapon-slot empty';
+        this.weaponEl.innerHTML = `<div class="w-badge">${icon('question')}</div><div class="w-name">Grab a barrel!</div>`;
       }
     }
 
-    const sorted = s.rows;
-    const meIdx = sorted.findIndex((r) => r.isPlayer);
-    const shown = sorted.slice(0, 5);
-    let board = shown
-      .map((r, i) => `<div class="row ${r.isPlayer ? 'me' : ''}"><span>${i + 1}</span><i style="background:${hex(r.color)}"></i><span class="nm">${esc(r.name)}</span><b>${r.kills}</b></div>`)
-      .join('');
-    if (meIdx >= 5) {
-      const r = sorted[meIdx];
-      board += `<div class="row me"><span>${meIdx + 1}</span><i style="background:${hex(r.color)}"></i><span class="nm">${esc(r.name)}</span><b>${r.kills}</b></div>`;
+    const rows = s.rows;
+    const meIdx = rows.findIndex((r) => r.isPlayer);
+    const rankKey = `${meIdx}/${rows.length}`;
+    if (rankKey !== this.lastRank) {
+      this.lastRank = rankKey;
+      this.rankEl.innerHTML = `<span class="r-ic">${medal(meIdx + 1)}</span><span class="r-val">${ordinal(meIdx + 1)}</span><span class="r-of">/ ${rows.length}</span>`;
     }
+    const row = (r: ScoreRow, i: number) =>
+      `<div class="row ${r.isPlayer ? 'me' : ''}"><span class="pos">${i + 1}</span><i style="background:${hex(r.color)}"></i><span class="nm">${esc(r.name)}</span><b>${r.kills}</b></div>`;
+    let board = rows.slice(0, 4).map(row).join('');
+    if (meIdx >= 4) board += `<div class="gap">• • •</div>${row(rows[meIdx], meIdx)}`;
     if (board !== this.lastBoard) {
       this.boardEl.innerHTML = board;
       this.lastBoard = board;
     }
 
     if (playerRespawn !== null) {
-      this.center.innerHTML = `<div class="big">Sunk!</div><div>Back in ${Math.ceil(playerRespawn)}…</div>`;
-      this.centerTimer = 0.1;
+      this.center.innerHTML = `<div class="big sunk">SUNK!</div><div class="sub">Back in ${Math.ceil(playerRespawn)}…</div>`;
+      this.centerTimer = 0.15;
     }
   }
 
@@ -271,19 +356,38 @@ export class UI {
       this.centerTimer -= dt;
       if (this.centerTimer <= 0) this.center.innerHTML = '';
     }
+    if (this.toastTimer > 0) {
+      this.toastTimer -= dt;
+      if (this.toastTimer <= 0) this.toast.innerHTML = '';
+    }
   }
 
-  message(html: string, seconds: number): void {
+  private message(html: string, seconds: number): void {
     this.center.innerHTML = html;
     this.centerTimer = seconds;
   }
 
-  feed(killer: { name: string; color: number } | null, victim: { name: string; color: number }, icon: string): void {
+  /** 3, 2, 1 … then 0 = GO! */
+  countdown(n: number): void {
+    this.message(n > 0 ? `<div class="big count">${n}</div>` : `<div class="big count go">GO!</div>`, n > 0 ? 1 : 0.8);
+  }
+
+  killBanner(victim: string): void {
+    this.message(`<div class="big kill">+1 SINK</div><div class="sub">${esc(victim)}</div>`, 1.4);
+  }
+
+  weaponToast(id: WeaponId): void {
+    const w = WEAPONS[id];
+    this.toast.innerHTML = `<div class="toast-in"><span class="ic">${icon(w.icon)}</span>${w.name}</div>`;
+    this.toastTimer = 1.3;
+  }
+
+  feed(killer: { name: string; color: number } | null, victim: { name: string; color: number }, iconKey: string): void {
     const row = document.createElement('div');
     row.className = 'feed-row';
     row.innerHTML = killer
-      ? `<span style="color:${hex(killer.color)}">${esc(killer.name)}</span> ${icon} <span style="color:${hex(victim.color)}">${esc(victim.name)}</span>`
-      : `<span style="color:${hex(victim.color)}">${esc(victim.name)}</span> 🌊 sank`;
+      ? `<span class="who" style="--c:${hex(killer.color)}">${esc(killer.name)}</span><span class="ic">${icon(iconKey)}</span><span class="who" style="--c:${hex(victim.color)}">${esc(victim.name)}</span>`
+      : `<span class="who" style="--c:${hex(victim.color)}">${esc(victim.name)}</span><span class="ic">${icon('sink')}</span>`;
     this.feedEl.prepend(row);
     while (this.feedEl.children.length > 5) this.feedEl.lastChild?.remove();
     setTimeout(() => row.classList.add('fade'), 4000);
