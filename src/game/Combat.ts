@@ -297,8 +297,8 @@ export class Combat {
       if (hit || blocked || p.life <= 0) {
         if (hit) {
           h.damage(hit, p.kind === 'cannon' ? T.cannonDamage : T.torpedoDamage, p.owner, WEAPONS[p.kind].icon);
-          hit.vx += Math.sin(p.heading) * 8;
-          hit.vz += Math.cos(p.heading) * 8;
+          hit.vx += Math.sin(p.heading) * T.hitKnockback;
+          hit.vz += Math.cos(p.heading) * T.hitKnockback;
           this.explode(p.x, p.z, wy + 0.5, p.kind === 'torpedo');
         } else if (blocked) {
           this.explode(p.x, p.z, wy + 0.5, false);
@@ -334,8 +334,8 @@ export class Combat {
             const d = Math.hypot(b.x - m.x, b.z - m.z);
             if (d < 4.5) {
               h.damage(b, T.mineDamage, m.owner, WEAPONS.mine.icon);
-              b.vx += ((b.x - m.x) / (d || 1)) * 12;
-              b.vz += ((b.z - m.z) / (d || 1)) * 12;
+              b.vx += ((b.x - m.x) / (d || 1)) * T.mineKnockback;
+              b.vz += ((b.z - m.z) / (d || 1)) * T.mineKnockback;
             }
           }
           this.explode(m.x, m.z, wy + 0.4, true);

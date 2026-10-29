@@ -32,6 +32,7 @@ async function boot() {
 
   // Dev shortcut: ?autoplay=pond|lake|sea jumps straight into a match.
   if (import.meta.env.DEV) {
+    (window as unknown as { __game: Game }).__game = game; // for automated handling tests
     const map = new URLSearchParams(location.search).get('autoplay');
     if (map) ui.onPlay({ ...ui.config, map: map as PlayConfig['map'] });
   }

@@ -7,16 +7,26 @@ export const RESPAWN_SECONDS = 3;
 export const SPAWN_PROTECTION_SECONDS = 2;
 export const PICKUP_RESPAWN_SECONDS = 7;
 
+// Units are roughly metres; the boat is ~2.6 long. Tweak here to change the handling feel.
 export const BOAT = {
   radius: 1.25,
-  accel: 22,
-  reverseAccel: 10,
-  maxSpeed: 17,
-  turboMultiplier: 1.7,
-  turnRate: 2.6, // rad/s at full speed
-  forwardDrag: 0.9,
-  lateralGrip: 2.4, // lower = more drift (water feels slippery)
-  bounce: 0.5,
+  maxSpeed: 11.5, // top paddling speed (u/s). Pond crosses in ~8 s
+  reverseSpeed: 4.5,
+  accel: 13, // thrust; tapers off near top speed (strong launch, smooth top end)
+  reverseAccel: 7,
+  brake: 16, // pressing back while still moving forward
+  coastDrag: 0.55, // water drag when not paddling: boats glide to a stop
+  baseDrag: 0.12, // drag while paddling
+  throttleResponse: 6, // how quickly paddling effort ramps up/down
+  steerResponse: 7, // how quickly the rudder swings to full lock (keys are on/off; this smooths them)
+  turnRate: 2.1, // peak yaw rate, rad/s (~120°/s)
+  turnResponse: 6, // yaw inertia: how quickly the hull starts/stops rotating
+  lateralGrip: 5.5, // sideways slip decay; lower = more drift
+  cornerCarry: 0.6, // share of turn speed-loss recovered while paddling (0 = sim-like scrub, 1 = no loss)
+  turboMultiplier: 1.55,
+  turboAccel: 2.2,
+  bounce: 0.35, // wall / rock restitution
+  boatRestitution: 0.3, // boat-vs-boat bounciness
 };
 
 export type WeaponId = 'cannon' | 'torpedo' | 'mine' | 'tidal' | 'shield' | 'turbo';
@@ -45,7 +55,7 @@ export const WEAPON_TUNING = {
   cannonLife: 1.3,
   cannonDamage: 1,
   cannonCooldown: 0.35,
-  torpedoSpeed: 30,
+  torpedoSpeed: 24,
   torpedoTurn: 2.4,
   torpedoLife: 4,
   torpedoDamage: 2,
@@ -55,7 +65,10 @@ export const WEAPON_TUNING = {
   mineRadius: 2.2,
   tidalRadius: 13,
   tidalDamage: 1,
-  tidalPush: 26,
+  tidalPush: 17,
+  hitKnockback: 5.5, // cannon / torpedo shove
+  mineKnockback: 9,
+  ramKnockback: 10,
   shieldSeconds: 6,
   turboSeconds: 3,
   turboRamDamage: 1,

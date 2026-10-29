@@ -8,7 +8,7 @@ import { Particles } from './Particles';
 import { Water } from './Water';
 import { Sfx } from './Audio';
 import {
-  BOT_COUNT, BOT_NAMES, MAPS, MATCH_SECONDS, PLAYER_COLORS, RESPAWN_SECONDS,
+  BOAT, BOT_COUNT, BOT_NAMES, MAPS, MATCH_SECONDS, PLAYER_COLORS, RESPAWN_SECONDS,
   SPAWN_PROTECTION_SECONDS, WEAPONS, WEAPON_TUNING, type MapId, type WeaponId,
 } from './config';
 import { angleDiff, damp } from './util';
@@ -91,7 +91,8 @@ export class Game implements CombatHost {
     this.toMenu();
     let last = performance.now();
     const frame = (now: number) => {
-      const dt = Math.min(0.05, (now - last) / 1000);
+      // rAF timestamps can be slightly *older* than `last` on the first frame: never step backwards.
+      const dt = Math.max(0, Math.min(0.05, (now - last) / 1000));
       last = now;
       this.frame(dt);
       requestAnimationFrame(frame);
@@ -386,6 +387,7 @@ export class Game implements CombatHost {
     const acc = (this.wakeAcc.get(b.id) ?? 0) + dt * s * (b.turboT > 0 ? 2.5 : 1.1);
     let n = Math.floor(acc);
     this.wakeAcc.set(b.id, acc - n);
+    n = Math.min(n, 6);
     const fx = b.forwardX, fz = b.forwardZ;
     while (n-- > 0) {
       const side = Math.random() < 0.5 ? -1 : 1;
@@ -415,7 +417,7 @@ export class Game implements CombatHost {
         b.z += nz * push;
         const rel = (b.vx - a.vx) * nx + (b.vz - a.vz) * nz;
         if (rel >= 0) continue;
-        const imp = -rel * 0.8;
+        const imp = (-rel * (1 + BOAT.boatRestitution)) / 2; // equal masses
         a.vx -= nx * imp;
         a.vz -= nz * imp;
         b.vx += nx * imp;
@@ -425,8 +427,8 @@ export class Game implements CombatHost {
         for (const [ram, victim] of [[a, b], [b, a]] as const) {
           if (ram.turboT > 0 && -rel > 5 && (ram.ramCooldown.get(victim.id) ?? 0) <= 0) {
             ram.ramCooldown.set(victim.id, 1);
-            victim.vx += (victim === b ? nx : -nx) * 14;
-            victim.vz += (victim === b ? nz : -nz) * 14;
+            victim.vx += (victim === b ? nx : -nx) * WEAPON_TUNING.ramKnockback;
+            victim.vz += (victim === b ? nz : -nz) * WEAPON_TUNING.ramKnockback;
             this.damage(victim, WEAPON_TUNING.turboRamDamage, ram, WEAPONS.turbo.icon);
             Sfx.boom(this.listenerDist(victim.x, victim.z));
           }
@@ -463,12 +465,14 @@ export class Game implements CombatHost {
       return;
     }
     const portrait = cam.aspect < 1;
-    const dist = portrait ? 13 : 9.5;
+    const speedK = Math.min(1.5, p.speed / BOAT.maxSpeed);
+    // Pull back slightly with speed so going fast *feels* fast without the boat actually being twitchy.
+    const dist = (portrait ? 13 : 9.5) + speedK * 1.2;
     const height = portrait ? 8 : 5.2;
-    this.camHeading += angleDiff(this.camHeading, p.heading) * (snap ? 1 : damp(4, dt));
+    this.camHeading += angleDiff(this.camHeading, p.heading) * (snap ? 1 : damp(3.2, dt));
     const fx = Math.sin(this.camHeading), fz = Math.cos(this.camHeading);
     const tx = p.x - fx * dist, tz = p.z - fz * dist;
-    const k = snap ? 1 : damp(7, dt);
+    const k = snap ? 1 : damp(5.5, dt);
     this.camPos.x += (tx - this.camPos.x) * k;
     this.camPos.z += (tz - this.camPos.z) * k;
     this.camPos.y += (p.y * 0.3 + height - this.camPos.y) * k;
@@ -482,7 +486,7 @@ export class Game implements CombatHost {
       this.camShake = Math.max(0, this.camShake - dt * 2.5);
     }
     cam.lookAt(this.camLook);
-    const fov = (portrait ? 70 : 60) + (p.turboT > 0 ? 10 : 0);
+    const fov = (portrait ? 70 : 60) + speedK * 4 + (p.turboT > 0 ? 7 : 0);
     if (Math.abs(cam.fov - fov) > 0.1) {
       cam.fov += (fov - cam.fov) * (snap ? 1 : damp(5, dt));
       cam.updateProjectionMatrix();

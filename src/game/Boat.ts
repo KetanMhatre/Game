@@ -50,6 +50,11 @@ export class Boat {
 
   private pitch = 0;
   private roll = 0;
+  /** Smoothed controls and motion state (see update()). */
+  private steer = 0;
+  private throttle = 0;
+  private yawRate = 0;
+  private accelF = 0;
   private sinkT = 0;
   private label: THREE.Sprite;
   private labelCanvas: HTMLCanvasElement;
@@ -108,6 +113,8 @@ export class Boat {
     this.weapon = null;
     this.ammo = 0;
     this.lastHitBy = null;
+    this.steer = this.throttle = this.yawRate = this.accelF = 0;
+    this.pitch = this.roll = 0;
     this.model.root.visible = true;
     this.model.tilt.rotation.set(0, 0, 0);
     this.drawLabel();
@@ -173,17 +180,48 @@ export class Boat {
     let vL = this.vx * rx + this.vz * rz;
 
     const turbo = this.turboT > 0;
-    const throttle = turbo ? 1 : clamp(inp.throttle, -1, 1);
-    const maxF = BOAT.maxSpeed * (turbo ? BOAT.turboMultiplier : 1);
-    if (throttle > 0) vF += throttle * BOAT.accel * (turbo ? 2 : 1) * dt;
-    else if (throttle < 0) vF += throttle * (vF > 0 ? BOAT.accel * 1.4 : BOAT.reverseAccel) * dt;
-    vF -= vF * BOAT.forwardDrag * dt * (throttle === 0 ? 1.6 : 0.5);
-    vF = clamp(vF, -BOAT.maxSpeed * 0.45, maxF);
-    vL *= Math.exp(-BOAT.lateralGrip * dt);
 
-    const turnFactor = clamp(Math.abs(vF) / 7, 0.4, 1);
+    // Smooth the raw inputs: keyboard keys are on/off, this gives them analog-like ramps.
+    const steerIn = clamp(inp.steer, -1, 1);
+    const recentring = Math.abs(steerIn) < Math.abs(this.steer) || steerIn * this.steer < 0;
+    this.steer += (steerIn - this.steer) * damp(BOAT.steerResponse * (recentring ? 1.6 : 1), dt);
+    const throttleIn = turbo ? 1 : clamp(inp.throttle, -1, 1);
+    this.throttle += (throttleIn - this.throttle) * damp(BOAT.throttleResponse, dt);
+    const thr = this.throttle;
+
+    // Forward thrust tapers as speed approaches the cap: punchy launch, smooth top end.
+    const maxF = BOAT.maxSpeed * (turbo ? BOAT.turboMultiplier : 1);
+    const prevVF = vF;
+    if (thr > 0.02) {
+      const t = clamp(vF / maxF, 0, 1);
+      vF += thr * BOAT.accel * (turbo ? BOAT.turboAccel : 1) * (1 - t * t) * dt;
+    } else if (thr < -0.02) {
+      if (vF > 0.3) vF += thr * BOAT.brake * dt;
+      else {
+        const t = clamp(-vF / BOAT.reverseSpeed, 0, 1);
+        vF += thr * BOAT.reverseAccel * (1 - t * t) * dt;
+      }
+    }
+    vF *= Math.exp(-(Math.abs(thr) < 0.05 ? BOAT.coastDrag : BOAT.baseDrag) * dt);
+    // Knockbacks and turbo can push past the cap: bleed the excess off instead of hard-clamping.
+    if (vF > maxF) vF += (maxF - vF) * damp(2.5, dt);
+    if (vF < -BOAT.reverseSpeed) vF += (-BOAT.reverseSpeed - vF) * damp(2.5, dt);
+    // Sideways slip decays: the hull slides a little through turns, like a real boat.
+    // While paddling, part of that slide is carried into forward speed so corners keep their flow.
+    // Only a share of the speed actually lost is restored, so turning is never faster than straight.
+    const before = Math.hypot(vF, vL);
+    vL *= Math.exp(-BOAT.lateralGrip * dt);
+    if (thr > 0.02 && vF > 0) vF += (before - Math.hypot(vF, vL)) * BOAT.cornerCarry * thr;
+
+    // Yaw with inertia. Turning authority depends on speed: paddles can pivot a stopped boat
+    // slowly, it's sharpest at cruising speed and widens a bit at top speed / turbo.
+    const s = Math.abs(vF) / BOAT.maxSpeed;
+    const authority = 0.35 + 0.65 * Math.min(1, s / 0.45) - Math.max(0, s - 0.8) * 0.5;
     const dir = vF < -0.5 ? -1 : 1;
-    this.heading -= clamp(inp.steer, -1, 1) * BOAT.turnRate * turnFactor * dir * dt;
+    const targetYaw = this.steer * BOAT.turnRate * authority * dir;
+    this.yawRate += (targetYaw - this.yawRate) * damp(BOAT.turnResponse, dt);
+    this.heading -= this.yawRate * dt;
+    if (dt > 0) this.accelF += ((vF - prevVF) / dt - this.accelF) * damp(6, dt);
 
     this.vx = fx * vF + rx * vL;
     this.vz = fz * vF + rz * vL;
@@ -203,10 +241,12 @@ export class Boat {
     const hB = waveHeight(this.x - fx * 1.2, this.z - fz * 1.2, time, amp);
     const hR = waveHeight(this.x + rx, this.z + rz, time, amp);
     const hL = waveHeight(this.x - rx, this.z - rz, time, amp);
-    const accelPitch = throttle > 0 && vF < maxF * 0.8 ? -0.06 : 0;
-    const targetPitch = Math.atan2(hB - hF, 2.4) + accelPitch - clamp(vF / BOAT.maxSpeed, 0, 1.5) * 0.04;
-    const targetRoll = Math.atan2(hL - hR, 2) +clamp(inp.steer, -1, 1) * clamp(vF / BOAT.maxSpeed, 0, 1) * 0.16;
-    const k = damp(8, dt);
+    // Bow lifts when accelerating and dips when braking; hull leans into turns with centripetal force.
+    const accelPitch = -clamp(this.accelF / BOAT.accel, -1, 1) * 0.07;
+    const targetPitch = Math.atan2(hB - hF, 2.4) + accelPitch - clamp(vF / BOAT.maxSpeed, 0, 1.5) * 0.035;
+    const lean = clamp((this.yawRate * vF) / (BOAT.turnRate * BOAT.maxSpeed), -1, 1) * 0.17;
+    const targetRoll = Math.atan2(hL - hR, 2) + lean;
+    const k = damp(6, dt);
     this.pitch += (targetPitch - this.pitch) * k;
     this.roll += (targetRoll - this.roll) * k;
     this.y = h + 0.42;
@@ -215,7 +255,7 @@ export class Boat {
     root.position.set(this.x, this.y, this.z);
     root.rotation.y = this.heading;
     this.model.tilt.rotation.set(this.pitch, 0, this.roll);
-    this.model.animate(dt, vF, time);
+    this.model.animate(dt, vF, Math.abs(thr), time);
 
     const sh = this.model.shield;
     sh.visible = this.shieldT > 0 || (this.protectT > 0 && Math.floor(time * 10) % 2 === 0);

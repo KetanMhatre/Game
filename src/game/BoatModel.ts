@@ -130,13 +130,15 @@ export class BoatModel {
     this.root.add(this.tilt);
   }
 
-  animate(dt: number, speed: number, time: number): void {
-    const s = Math.min(1, Math.abs(speed) / 10);
-    this.paddlePhase += dt * (2 + s * 9);
+  /** `effort` is 0..1 paddling input: strokes follow effort, not just speed, so coasting looks idle. */
+  animate(dt: number, speed: number, effort: number, time: number): void {
+    const s = Math.min(1, Math.abs(speed) / 11);
+    const e = Math.max(effort, s * 0.25);
+    this.paddlePhase += dt * (1.5 + e * 7.5) * (speed < -0.5 ? -1 : 1);
     for (const p of this.paddles) {
       const side = p.userData.side as number;
-      p.rotation.x = Math.sin(this.paddlePhase) * 0.7 * (0.2 + s);
-      p.rotation.z = side * (0.9 + Math.cos(this.paddlePhase) * 0.15 * s);
+      p.rotation.x = Math.sin(this.paddlePhase) * 0.75 * (0.15 + e);
+      p.rotation.z = side * (0.9 + Math.cos(this.paddlePhase) * 0.18 * e);
     }
     this.flag.rotation.y = Math.sin(time * 6 + this.paddlePhase) * 0.25;
   }
