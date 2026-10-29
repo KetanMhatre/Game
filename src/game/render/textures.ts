@@ -150,25 +150,6 @@ export function barrelTexture(): THREE.CanvasTexture {
   );
 }
 
-/** Fibrous coconut husk. */
-export function coconutTexture(): THREE.CanvasTexture {
-  return cached('coconut', () =>
-    make(128, 128, (c, w, h) => {
-      c.fillStyle = '#6b4223';
-      c.fillRect(0, 0, w, h);
-      for (let i = 0; i < 900; i++) {
-        const x = rnd() * w, y = rnd() * h;
-        c.strokeStyle = rnd() < 0.5 ? 'rgba(150,100,55,0.55)' : 'rgba(40,22,8,0.5)';
-        c.lineWidth = 1;
-        c.beginPath();
-        c.moveTo(x, y);
-        c.lineTo(x + (rnd() - 0.5) * 3, y + 3 + rnd() * 6);
-        c.stroke();
-      }
-    }),
-  );
-}
-
 /** Sailor shirt: white with stripes in the player's colour. */
 export function stripesTexture(color: number): THREE.CanvasTexture {
   return cached(`stripes-${color}`, () => {
@@ -213,33 +194,12 @@ export function ringTexture(): THREE.CanvasTexture {
   );
 }
 
-/** Foamy expanding ring for the Tidal Splash shockwave. */
-export function foamRingTexture(): THREE.CanvasTexture {
-  return cached('foamring', () =>
-    make(256, 256, (c, w, h) => {
-      const cx = w / 2, cy = h / 2;
-      const g = c.createRadialGradient(cx, cy, w * 0.3, cx, cy, w / 2);
-      g.addColorStop(0, 'rgba(255,255,255,0)');
-      g.addColorStop(0.55, 'rgba(220,245,255,0.35)');
-      g.addColorStop(0.85, 'rgba(255,255,255,1)');
-      g.addColorStop(1, 'rgba(255,255,255,0)');
-      c.fillStyle = g;
-      c.fillRect(0, 0, w, h);
-      c.globalCompositeOperation = 'destination-out';
-      for (let i = 0; i < 160; i++) {
-        const a = rnd() * Math.PI * 2, r = w * (0.36 + rnd() * 0.13);
-        c.beginPath();
-        c.arc(cx + Math.cos(a) * r, cy + Math.sin(a) * r, 2 + rnd() * 5, 0, Math.PI * 2);
-        c.fillStyle = `rgba(0,0,0,${0.3 + rnd() * 0.5})`;
-        c.fill();
-      }
-    }),
-  );
-}
-
-/** Floating "?" badge above pickup barrels. */
-export function badgeTexture(): THREE.CanvasTexture {
-  return cached('badge', () =>
+/**
+ * Floating "?" badge above pickup crates. The fake-crate version is nearly identical:
+ * the "?" is pale pink with a dark-red outline: a fair tell for players who look closely.
+ */
+export function badgeTexture(fake = false): THREE.CanvasTexture {
+  return cached(fake ? 'badge-fake' : 'badge', () =>
     make(128, 128, (c, w, h) => {
       const cx = w / 2, cy = h / 2;
       c.beginPath();
@@ -260,10 +220,83 @@ export function badgeTexture(): THREE.CanvasTexture {
       c.textAlign = 'center';
       c.textBaseline = 'middle';
       c.lineWidth = 10;
-      c.strokeStyle = '#0d3b66';
+      c.strokeStyle = fake ? '#6e0f24' : '#0d3b66';
       c.strokeText('?', cx, cy + 4);
-      c.fillStyle = '#ffffff';
+      c.fillStyle = fake ? '#ffd9df' : '#ffffff';
       c.fillText('?', cx, cy + 4);
+    }),
+  );
+}
+
+/** Wooden supply crate face: frame, planks, diagonal brace and nails. Used on all six faces. */
+export function crateTexture(): THREE.CanvasTexture {
+  return cached('crate', () =>
+    make(256, 256, (c, w, h) => {
+      const planks = 4;
+      for (let i = 0; i < planks; i++) {
+        c.fillStyle = css(0xc07c42, 0.88 + rnd() * 0.22);
+        c.fillRect(0, (i * h) / planks, w, h / planks);
+      }
+      grainH(c, w, 0, h, 30);
+      c.fillStyle = 'rgba(52,26,8,0.7)';
+      for (let i = 1; i < planks; i++) c.fillRect(0, (i * h) / planks - 1.5, w, 3);
+      // Diagonal brace.
+      c.save();
+      c.translate(w / 2, h / 2);
+      c.rotate(-Math.PI / 4);
+      c.fillStyle = 'rgba(40,20,5,0.35)';
+      c.fillRect(-w * 0.72, -15, w * 1.44, 34);
+      c.fillStyle = css(0xd49656);
+      c.fillRect(-w * 0.72, -17, w * 1.44, 30);
+      c.fillStyle = 'rgba(255,235,200,0.3)';
+      c.fillRect(-w * 0.72, -17, w * 1.44, 5);
+      c.restore();
+      // Frame.
+      const f = 26;
+      c.fillStyle = css(0x9a5e2e);
+      c.fillRect(0, 0, w, f);
+      c.fillRect(0, h - f, w, f);
+      c.fillRect(0, 0, f, h);
+      c.fillRect(w - f, 0, f, h);
+      c.strokeStyle = 'rgba(40,20,5,0.6)';
+      c.lineWidth = 3;
+      c.strokeRect(f, f, w - 2 * f, h - 2 * f);
+      c.strokeRect(1.5, 1.5, w - 3, h - 3);
+      c.fillStyle = 'rgba(255,235,200,0.25)';
+      c.fillRect(0, 0, w, 4);
+      // Nails.
+      c.fillStyle = '#3b3f45';
+      for (const [x, y] of [[13, 13], [w - 13, 13], [13, h - 13], [w - 13, h - 13], [w / 2, 13], [w / 2, h - 13], [13, h / 2], [w - 13, h / 2]]) {
+        c.beginPath();
+        c.arc(x, y, 3.5, 0, Math.PI * 2);
+        c.fill();
+      }
+    }),
+  );
+}
+
+/** Landing marker for mortar strikes (tinted red by its material). */
+export function targetTexture(): THREE.CanvasTexture {
+  return cached('target', () =>
+    make(256, 256, (c, w, h) => {
+      const cx = w / 2, cy = h / 2;
+      c.strokeStyle = 'rgba(255,255,255,0.95)';
+      c.lineWidth = 12;
+      c.beginPath();
+      c.arc(cx, cy, w * 0.42, 0, Math.PI * 2);
+      c.stroke();
+      c.lineWidth = 8;
+      for (let i = 0; i < 4; i++) {
+        const a = (i / 4) * Math.PI * 2 + Math.PI / 4;
+        c.beginPath();
+        c.moveTo(cx + Math.cos(a) * w * 0.16, cy + Math.sin(a) * h * 0.16);
+        c.lineTo(cx + Math.cos(a) * w * 0.32, cy + Math.sin(a) * h * 0.32);
+        c.stroke();
+      }
+      c.fillStyle = 'rgba(255,255,255,0.25)';
+      c.beginPath();
+      c.arc(cx, cy, w * 0.42, 0, Math.PI * 2);
+      c.fill();
     }),
   );
 }

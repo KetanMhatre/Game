@@ -23,13 +23,23 @@ export const BOAT = {
   turnResponse: 6, // yaw inertia: how quickly the hull starts/stops rotating
   lateralGrip: 5.5, // sideways slip decay; lower = more drift
   cornerCarry: 0.6, // share of turn speed-loss recovered while paddling (0 = sim-like scrub, 1 = no loss)
-  turboMultiplier: 1.55,
-  turboAccel: 2.2,
   bounce: 0.35, // wall / rock restitution
   boatRestitution: 0.3, // boat-vs-boat bounciness
 };
 
-export type WeaponId = 'cannon' | 'torpedo' | 'mine' | 'tidal' | 'shield' | 'turbo';
+export type WeaponId =
+  | 'torpedoes'
+  | 'broadside'
+  | 'mines'
+  | 'barrier'
+  | 'fakeCrate'
+  | 'mortar'
+  | 'deckGun'
+  | 'maelstrom'
+  | 'depthCharges'
+  | 'harpoon'
+  | 'flail'
+  | 'drone';
 
 export interface WeaponDef {
   id: WeaponId;
@@ -37,42 +47,48 @@ export interface WeaponDef {
   /** Key into ui/icons.ts (SVG). Emoji are avoided: newer ones render as boxes on older Windows/ChromeOS. */
   icon: string;
   ammo: number;
-  color: number;
-  /** Relative chance to roll from a pickup barrel. */
+  /** Relative chance to roll from a pickup crate. */
   weight: number;
+  desc: string;
 }
 
 export const WEAPONS: Record<WeaponId, WeaponDef> = {
-  cannon: { id: 'cannon', name: 'Coconut Cannon', icon: 'cannon', ammo: 3, color: 0x8b5a2b, weight: 30 },
-  torpedo: { id: 'torpedo', name: 'Puffer Torpedo', icon: 'torpedo', ammo: 1, color: 0xffcc33, weight: 18 },
-  mine: { id: 'mine', name: 'Urchin Mine', icon: 'mine', ammo: 2, color: 0x6a3d9a, weight: 18 },
-  tidal: { id: 'tidal', name: 'Tidal Splash', icon: 'tidal', ammo: 1, color: 0x4fc3f7, weight: 12 },
-  shield: { id: 'shield', name: 'Bubble Shield', icon: 'shield', ammo: 1, color: 0x9be7ff, weight: 10 },
-  turbo: { id: 'turbo', name: 'Turbo Paddle', icon: 'turbo', ammo: 1, color: 0xffffff, weight: 12 },
+  torpedoes: { id: 'torpedoes', name: 'Torpedoes', icon: 'torpedoes', ammo: 2, weight: 12, desc: 'Two fast torpedoes that curve toward rivals ahead.' },
+  broadside: { id: 'broadside', name: 'Broadside Cannon', icon: 'broadside', ammo: 3, weight: 11, desc: 'Fires cannonballs out of both sides at once.' },
+  mines: { id: 'mines', name: 'Naval Mines', icon: 'mines', ammo: 2, weight: 10, desc: 'Drop mines behind you. They blow up on contact.' },
+  barrier: { id: 'barrier', name: 'Hydro-Barrier', icon: 'barrier', ammo: 1, weight: 7, desc: 'A bubble shield that blocks all damage for 6 seconds.' },
+  fakeCrate: { id: 'fakeCrate', name: 'Fake Crate', icon: 'fakeCrate', ammo: 1, weight: 6, desc: 'A booby-trapped crate. Spot fakes by their red "?".' },
+  mortar: { id: 'mortar', name: 'Sea Mortar', icon: 'mortar', ammo: 2, weight: 9, desc: 'Lobs a shell onto the nearest rival ahead.' },
+  deckGun: { id: 'deckGun', name: 'Deck Gun', icon: 'deckGun', ammo: 30, weight: 11, desc: 'Hold fire for a rapid stream of bullets.' },
+  maelstrom: { id: 'maelstrom', name: 'Maelstrom', icon: 'maelstrom', ammo: 1, weight: 6, desc: 'Opens a whirlpool that drags rivals in.' },
+  depthCharges: { id: 'depthCharges', name: 'Depth Charges', icon: 'depthCharges', ammo: 1, weight: 8, desc: 'Three charges sink behind you and explode.' },
+  harpoon: { id: 'harpoon', name: 'Harpoon Hook', icon: 'harpoon', ammo: 2, weight: 8, desc: 'Spears a rival and yanks them toward you.' },
+  flail: { id: 'flail', name: 'Sea Flail', icon: 'flail', ammo: 1, weight: 6, desc: 'A spiked ball spins around your boat.' },
+  drone: { id: 'drone', name: 'Patrol Drone', icon: 'drone', ammo: 1, weight: 6, desc: 'A mini gunboat escorts you and shoots rivals.' },
 };
 
+/** Display order in the Arsenal screen. */
+export const WEAPON_ORDER: WeaponId[] = [
+  'torpedoes', 'broadside', 'mines', 'barrier',
+  'fakeCrate', 'mortar', 'deckGun', 'maelstrom',
+  'depthCharges', 'harpoon', 'flail', 'drone',
+];
+
+// Damage is in hearts (MAX_HP = 3). Fractional damage (Deck Gun, Drone) drains the bar gradually.
 export const WEAPON_TUNING = {
-  cannonSpeed: 48,
-  cannonLife: 1.3,
-  cannonDamage: 1,
-  cannonCooldown: 0.35,
-  torpedoSpeed: 24,
-  torpedoTurn: 2.4,
-  torpedoLife: 4,
-  torpedoDamage: 2,
-  mineArm: 0.6,
-  mineLife: 25,
-  mineDamage: 2,
-  mineRadius: 2.2,
-  tidalRadius: 13,
-  tidalDamage: 1,
-  tidalPush: 17,
-  hitKnockback: 5.5, // cannon / torpedo shove
-  mineKnockback: 9,
-  ramKnockback: 10,
-  shieldSeconds: 6,
-  turboSeconds: 3,
-  turboRamDamage: 1,
+  torpedoes: { speed: 30, life: 2.2, turn: 1.0, damage: 1, cooldown: 0.6, knock: 6 },
+  broadside: { speed: 30, up: 5, gravity: 14, damage: 1, cooldown: 0.55, knock: 6, cone: 0.7, range: 34 },
+  mines: { arm: 0.6, life: 25, damage: 2, trigger: 2.2, blast: 4.5, knock: 9 },
+  barrier: { seconds: 6 },
+  fakeCrate: { life: 30, damage: 2, blast: 3.2, knock: 10 },
+  mortar: { flight: 1.25, gravity: 24, damage: 1.5, blast: 3.8, minRange: 10, maxRange: 42, knock: 8 },
+  deckGun: { interval: 0.085, speed: 75, life: 0.45, damage: 0.12, spread: 0.035 },
+  // Max 6 s × 0.4 = 2.4 hearts: a whirlpool alone can't sink a full-health boat, it sets up the kill.
+  maelstrom: { life: 6, radius: 10, pull: 14.5, swirl: 10, core: 2.6, dps: 0.4, distance: 14 },
+  depthCharges: { fuse: 1.0, stagger: 0.22, damage: 1, blast: 4.2, knock: 8 },
+  harpoon: { speed: 55, life: 0.7, damage: 1, pull: 38, pullTime: 0.55, stun: 0.8 },
+  flail: { seconds: 5, radius: 3.0, spin: 6, damage: 1, hitCooldown: 0.9, knock: 14 },
+  drone: { seconds: 10, range: 26, interval: 0.6, damage: 0.2, orbit: 4, orbitSpeed: 1.3 },
 };
 
 export type MapId = 'pond' | 'lake' | 'sea';

@@ -1,4 +1,4 @@
-import { MAPS, MAX_HP, PLAYER_COLORS, WEAPONS, type MapId, type WeaponId } from '../game/config';
+import { MAPS, MAX_HP, PLAYER_COLORS, WEAPONS, WEAPON_ORDER, type MapId, type WeaponId } from '../game/config';
 import { SPECIES, type SpeciesId } from '../game/Character';
 import type { QualitySetting } from '../game/Game';
 import { icon, medal } from './icons';
@@ -8,6 +8,8 @@ export interface PlayConfig {
   color: number;
   map: MapId;
   character: SpeciesId;
+  /** Weapons crates may roll (Arsenal screen). */
+  arsenal: WeaponId[];
 }
 
 export interface ScoreRow {
@@ -35,6 +37,12 @@ const ordinal = (n: number) => {
 };
 const QUALITY_LABEL: Record<QualitySetting, string> = { auto: 'Auto', high: 'High', low: 'Low' };
 
+/** Saved arsenals may be missing, empty or contain removed weapons: fall back to everything. */
+function validArsenal(list: unknown): WeaponId[] {
+  const ok = Array.isArray(list) ? WEAPON_ORDER.filter((id) => list.includes(id)) : [];
+  return ok.length ? ok : [...WEAPON_ORDER];
+}
+
 export class UI {
   onPlay: (cfg: PlayConfig) => void = () => {};
   onMapSelect: (map: MapId) => void = () => {};
@@ -48,6 +56,7 @@ export class UI {
   onQualityChange: (q: QualitySetting) => void = () => {};
 
   private menu: HTMLDivElement;
+  private arsenalEl: HTMLDivElement;
   private hud: HTMLDivElement;
   private pause: HTMLDivElement;
   private end: HTMLDivElement;
@@ -76,9 +85,11 @@ export class UI {
       color: PLAYER_COLORS.includes(saved.color as number) ? (saved.color as number) : PLAYER_COLORS[0],
       map: saved.map && MAPS[saved.map] ? saved.map : 'pond',
       character: SPECIES.some((s) => s.id === saved.character) ? (saved.character as SpeciesId) : 'frog',
+      arsenal: validArsenal(saved.arsenal),
     };
     this.vignette = this.el('div', 'vignette');
     this.menu = this.el('div', 'screen menu');
+    this.arsenalEl = this.el('div', 'screen overlay hidden');
     this.hud = this.el('div', 'hud hidden');
     this.pause = this.el('div', 'screen overlay hidden');
     this.end = this.el('div', 'screen overlay hidden');
@@ -160,6 +171,8 @@ export class UI {
         <div class="col">
           <label class="lbl">Waters</label>
           <div class="maps">${maps}</div>
+          <button class="btn btn-alt arsenal-btn"><span class="ab-ics">${['torpedoes', 'deckGun', 'maelstrom'].map((w) => `<i>${icon(w)}</i>`).join('')}</span>
+            <span class="ab-label">Arsenal</span><b class="ab-count"></b></button>
           <button class="btn btn-play">PLAY</button>
           <div class="stats">${this.statsHtml()}</div>
           <div class="help">WASD / Arrows to paddle · Space or Click to fire · Esc to pause</div>
@@ -194,10 +207,94 @@ export class UI {
     this.menu.querySelector('.next')!.addEventListener('click', () => step(1));
     this.menu.querySelector('.btn-play')!.addEventListener('click', () => {
       if (!this.cfg.name) this.cfg.name = 'Captain';
-      this.onPlay({ ...this.cfg });
+      this.onPlay({ ...this.cfg, arsenal: [...this.cfg.arsenal] });
     });
+    this.menu.querySelector('.arsenal-btn')!.addEventListener('click', () => this.openArsenal());
     this.bindMute(this.menu);
     this.renderPicker();
+    this.renderArsenalCount();
+  }
+
+  private renderArsenalCount(): void {
+    const el = this.menu.querySelector('.ab-count');
+    if (el) el.textContent = `${this.cfg.arsenal.length}/${WEAPON_ORDER.length}`;
+  }
+
+  // ---------------------------------------------------------------- arsenal
+
+  /** Weapon picker: toggle which weapons crates can roll. Edits a draft; Done applies it. */
+  private openArsenal(): void {
+    const draft = new Set<WeaponId>(this.cfg.arsenal);
+    const items = WEAPON_ORDER.map((id) => {
+      const w = WEAPONS[id];
+      return `<button class="ars-item" data-w="${id}" aria-pressed="true">
+        <span class="ars-badge">${icon(w.icon)}<span class="ars-check"></span></span>
+        <span class="ars-name">${w.name}</span></button>`;
+    }).join('');
+    this.arsenalEl.innerHTML = `<div class="card arsenal-card">
+      <h2 class="title">Arsenal</h2>
+      <p class="tag ars-sub">Choose which weapons can drop from crates</p>
+      <div class="ars-grid">${items}</div>
+      <div class="ars-desc"></div>
+      <div class="ars-btns">
+        <button class="btn btn-alt all-on">All ON</button>
+        <button class="btn btn-alt all-off">All OFF</button>
+        <button class="btn btn-alt shuffle">Randomize</button>
+        <button class="btn btn-play done">Done</button>
+      </div></div>`;
+    const desc = this.arsenalEl.querySelector<HTMLDivElement>('.ars-desc')!;
+    const buttons = [...this.arsenalEl.querySelectorAll<HTMLButtonElement>('.ars-item')];
+    const describe = (id: WeaponId | null) => {
+      desc.classList.remove('warn');
+      desc.innerHTML = id
+        ? `<b>${WEAPONS[id].name}</b> — ${esc(WEAPONS[id].desc)}`
+        : `<b>${draft.size}</b> of ${WEAPON_ORDER.length} weapons on`;
+    };
+    const sync = () => {
+      for (const b of buttons) {
+        const on = draft.has(b.dataset.w as WeaponId);
+        b.classList.toggle('on', on);
+        b.setAttribute('aria-pressed', String(on));
+      }
+    };
+    for (const b of buttons) {
+      const id = b.dataset.w as WeaponId;
+      b.addEventListener('click', () => {
+        if (draft.has(id)) draft.delete(id);
+        else draft.add(id);
+        sync();
+        describe(id);
+      });
+      b.addEventListener('pointerenter', () => describe(id));
+    }
+    const setAll = (ids: WeaponId[]) => {
+      draft.clear();
+      ids.forEach((id) => draft.add(id));
+      sync();
+      describe(null);
+    };
+    this.arsenalEl.querySelector('.all-on')!.addEventListener('click', () => setAll(WEAPON_ORDER));
+    this.arsenalEl.querySelector('.all-off')!.addEventListener('click', () => setAll([]));
+    this.arsenalEl.querySelector('.shuffle')!.addEventListener('click', () => {
+      // A random loadout of 4–8 weapons.
+      const n = 4 + Math.floor(Math.random() * 5);
+      setAll([...WEAPON_ORDER].sort(() => Math.random() - 0.5).slice(0, n));
+    });
+    this.arsenalEl.querySelector('.done')!.addEventListener('click', () => {
+      if (!draft.size) {
+        desc.innerHTML = 'Turn on at least one weapon!';
+        desc.classList.remove('warn');
+        void desc.offsetWidth;
+        desc.classList.add('warn');
+        return;
+      }
+      this.cfg.arsenal = WEAPON_ORDER.filter((id) => draft.has(id));
+      this.renderArsenalCount();
+      this.arsenalEl.classList.add('hidden');
+    });
+    sync();
+    describe(null);
+    this.arsenalEl.classList.remove('hidden');
   }
 
   private renderPicker(): void {
@@ -234,6 +331,7 @@ export class UI {
 
   showMenu(): void {
     this.menu.classList.remove('hidden');
+    this.arsenalEl.classList.add('hidden');
     this.hud.classList.add('hidden');
     this.pause.classList.add('hidden');
     this.end.classList.add('hidden');
@@ -243,6 +341,7 @@ export class UI {
 
   showHud(): void {
     this.menu.classList.add('hidden');
+    this.arsenalEl.classList.add('hidden');
     this.end.classList.add('hidden');
     this.pause.classList.add('hidden');
     this.hud.classList.remove('hidden');
@@ -304,14 +403,18 @@ export class UI {
     this.timerBox.classList.toggle('low', t <= 15);
 
     if (s.hp !== this.lastHp) {
-      if (this.lastHp > s.hp) {
+      // Only shake for real hits, not every bullet graze.
+      if (this.lastHp - s.hp >= 0.5) {
         this.hpEl.classList.remove('hurt');
         void this.hpEl.offsetWidth;
         this.hpEl.classList.add('hurt');
       }
       this.lastHp = s.hp;
       let segs = '';
-      for (let i = 0; i < MAX_HP; i++) segs += `<i class="${i < s.hp ? 'full' : ''}"></i>`;
+      for (let i = 0; i < MAX_HP; i++) {
+        const f = Math.min(1, Math.max(0, s.hp - i));
+        segs += `<i><b style="width:${(f * 100).toFixed(1)}%"></b></i>`;
+      }
       this.hpEl.innerHTML = segs;
     }
 
@@ -325,7 +428,7 @@ export class UI {
           <div class="w-name">${w.name}</div>`;
       } else {
         this.weaponEl.className = 'weapon-slot empty';
-        this.weaponEl.innerHTML = `<div class="w-badge">${icon('question')}</div><div class="w-name">Grab a barrel!</div>`;
+        this.weaponEl.innerHTML = `<div class="w-badge">${icon('question')}</div><div class="w-name">Grab a crate!</div>`;
       }
     }
 

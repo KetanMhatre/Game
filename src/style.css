@@ -244,6 +244,65 @@ svg { display: block; width: 100%; height: 100%; }
 .map-name { font-family: var(--display); font-size: 15px; color: #fff; text-shadow: var(--outline); white-space: nowrap; }
 
 .btn-play.btn { font-size: 30px; padding: 13px; margin-top: 18px; }
+
+/* ---------------------------------------------------------------- arsenal */
+
+.arsenal-btn { display: flex; align-items: center; gap: 10px; font-size: 19px; margin-top: 14px; padding: 8px 14px 8px 10px; }
+.ab-ics { display: flex; }
+.ab-ics i { width: 32px; height: 32px; margin-left: -9px; padding: 3px; border-radius: 50%; border: 2.5px solid var(--ink); background: #fff; }
+.ab-ics i:first-child { margin-left: 0; }
+.ab-count { margin-left: auto; font-weight: 400; color: var(--gold-1); }
+
+.arsenal-card { width: min(640px, 100%); max-height: calc(100% - 12px); overflow-y: auto; scrollbar-width: none; text-align: center; }
+.ars-sub { margin: 0; }
+.ars-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px 10px; margin: 16px 0 10px; }
+.ars-item { display: flex; flex-direction: column; align-items: center; gap: 7px; padding: 0; border: none; background: none; cursor: pointer; font: inherit; }
+.ars-badge {
+  position: relative;
+  width: 92px;
+  height: 92px;
+  padding: 15px;
+  border-radius: 50%;
+  border: 4px solid var(--ink);
+  background: radial-gradient(circle at 50% 32%, #5ccdf2 0%, #1d78b5 70%, #145a8c 100%);
+  box-shadow: inset 0 4px 0 rgba(255, 255, 255, 0.35), 0 0 0 4px #9aa7b4, 0 5px 0 4px var(--ink);
+  transition: transform 0.1s, filter 0.15s, box-shadow 0.15s, opacity 0.15s;
+}
+.ars-item.on .ars-badge { box-shadow: inset 0 4px 0 rgba(255, 255, 255, 0.35), 0 0 0 4px #4cd97b, 0 5px 0 4px var(--ink); }
+.ars-item:not(.on) .ars-badge { filter: grayscale(0.9) brightness(0.85); opacity: 0.65; }
+.ars-item:hover .ars-badge { transform: translateY(-2px) scale(1.05); }
+.ars-item:active .ars-badge { transform: scale(0.95); }
+.ars-check {
+  position: absolute;
+  top: -7px;
+  right: -7px;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 3px solid var(--ink);
+  background: #4cd97b url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M5 12l5 5 9-10' stroke='%230b2a45' stroke-width='4' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center/70% no-repeat;
+}
+.ars-item:not(.on) .ars-check {
+  background: #c5ced6 url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M7 7l10 10M17 7L7 17' stroke='%230b2a45' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E") center/60% no-repeat;
+}
+.ars-name { font-family: var(--display); font-size: 15px; line-height: 1.05; color: #fff; text-shadow: var(--outline); }
+.ars-desc {
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 14px;
+  border-radius: 12px;
+  background: rgba(11, 42, 69, 0.07);
+  color: var(--ink-2);
+  font-size: 14px;
+  font-weight: 600;
+}
+.ars-desc b { margin-right: 5px; font-family: var(--display); font-weight: 400; color: var(--ink); }
+.ars-desc.warn { color: #d92d4f; animation: shake 0.35s; }
+.ars-btns { display: grid; grid-template-columns: repeat(3, 1fr) 1.3fr; gap: 8px; }
+.ars-btns .btn { margin-top: 10px; padding: 10px 6px; font-size: 16px; }
+.ars-btns .btn-play.btn { margin-top: 10px; padding: 10px; font-size: 21px; }
 .menu .btn-play { animation: breathe 1.8s ease-in-out infinite; }
 @keyframes breathe { 50% { transform: scale(1.035); } }
 
@@ -312,8 +371,16 @@ svg { display: block; width: 100%; height: 100%; }
 .hp { position: relative; display: flex; align-items: center; }
 .hp-ic { position: absolute; left: -12px; width: 52px; height: 52px; z-index: 2; filter: drop-shadow(0 3px 0 rgba(11, 42, 69, 0.4)); }
 .hp-track { display: flex; gap: 4px; padding: 6px 8px 6px 40px; height: 38px; border-radius: 19px; background: linear-gradient(180deg, #1b4b72, #0f3354); }
-.hp-track i { width: 46px; border-radius: 9px; background: rgba(0, 0, 0, 0.35); box-shadow: inset 0 2px 0 rgba(0, 0, 0, 0.25); }
-.hp-track i.full { background: linear-gradient(180deg, #ff8aa0 0%, var(--red) 45%, #d92d4f 100%); box-shadow: inset 0 3px 0 rgba(255, 255, 255, 0.45); }
+.hp-track i { position: relative; overflow: hidden; width: 46px; border-radius: 9px; background: rgba(0, 0, 0, 0.35); box-shadow: inset 0 2px 0 rgba(0, 0, 0, 0.25); }
+/* Segments fill partially: bullets chip health away gradually. */
+.hp-track i b {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: 9px;
+  background: linear-gradient(180deg, #ff8aa0 0%, var(--red) 45%, #d92d4f 100%);
+  box-shadow: inset 0 3px 0 rgba(255, 255, 255, 0.45);
+  transition: width 0.2s ease-out;
+}
 .hp-track.hurt { animation: shake 0.35s; }
 @keyframes shake { 20%, 60% { transform: translateX(-4px); } 40%, 80% { transform: translateX(4px); } }
 
@@ -503,6 +570,16 @@ svg { display: block; width: 100%; height: 100%; }
   .menu-card .btn-play.btn { margin-top: 12px; padding: 9px; font-size: 26px; }
   .menu-card .help { display: none; }
   .hud-tc { top: 8px; }
+  .menu-card .arsenal-btn { margin-top: 8px; padding: 6px 12px 6px 8px; font-size: 16px; }
+  .menu-card .ab-ics i { width: 26px; height: 26px; }
+  .arsenal-card { width: min(760px, 100%); padding: 10px 16px 12px; }
+  .ars-grid { grid-template-columns: repeat(6, 1fr); gap: 10px 6px; margin: 8px 0 6px; }
+  .ars-badge { width: 60px; height: 60px; padding: 9px; border-width: 3px; }
+  .ars-check { width: 20px; height: 20px; top: -5px; right: -5px; border-width: 2px; }
+  .ars-name { font-size: 11px; }
+  .ars-desc { min-height: 30px; font-size: 12px; }
+  .ars-btns .btn { margin-top: 6px; padding: 7px 4px; font-size: 14px; }
+  .ars-btns .btn-play.btn { margin-top: 6px; padding: 7px; font-size: 17px; }
   .results { max-height: 40vh; overflow-y: auto; }
   .res-row { padding: 2px 10px 2px 6px; }
   .end-card { padding: 8px 16px 12px; }
@@ -515,4 +592,7 @@ svg { display: block; width: 100%; height: 100%; }
   .hud-tc { top: 64px; gap: 8px; }
   .hud-tl { width: 140px; }
   .board { display: none; }
+  .ars-grid { grid-template-columns: repeat(3, 1fr); }
+  .ars-badge { width: 72px; height: 72px; padding: 11px; }
+  .ars-btns { grid-template-columns: 1fr 1fr; }
 }

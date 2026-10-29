@@ -36,7 +36,8 @@ export class Boat {
   respawnT = 0;
   protectT = 0;
   shieldT = 0;
-  turboT = 0;
+  /** Harpoon stun: controls barely respond while > 0. */
+  stunT = 0;
   cooldown = 0;
   weapon: WeaponId | null = null;
   ammo = 0;
@@ -46,8 +47,6 @@ export class Boat {
   deaths = 0;
   lastHitBy: Boat | null = null;
   lastHitT = 0;
-  /** Per-target cooldown for turbo ramming damage. */
-  ramCooldown = new Map<number, number>();
   /** Name tags are hidden for the menu's background boats. */
   labelEnabled = true;
 
@@ -112,10 +111,11 @@ export class Boat {
     this.alive = true;
     this.protectT = 0;
     this.shieldT = 0;
-    this.turboT = 0;
+    this.stunT = 0;
     this.sinkT = 0;
     this.weapon = null;
     this.ammo = 0;
+    this.model.setMount(null);
     this.lastHitBy = null;
     this.steer = this.throttle = this.yawRate = this.accelF = 0;
     this.pitch = this.roll = 0;
@@ -128,14 +128,18 @@ export class Boat {
     this.weapon = id;
     this.ammo = WEAPONS[id].ammo;
     this.weaponHeldT = 0;
+    this.model.setMount(id);
   }
 
   useAmmo(): void {
     this.ammo--;
-    if (this.ammo <= 0) this.weapon = null;
+    if (this.ammo <= 0) {
+      this.weapon = null;
+      this.model.setMount(null);
+    }
   }
 
-  /** Returns true if this hit killed the boat. */
+  /** Returns true if this hit killed the boat. Damage can be fractional (bullets). */
   takeDamage(amount: number, from: Boat | null): boolean {
     if (!this.alive || this.invulnerable) return false;
     this.hp = Math.max(0, this.hp - amount);
@@ -143,13 +147,16 @@ export class Boat {
       this.lastHitBy = from;
       this.lastHitT = 4;
     }
-    this.model.character.hit();
+    // Small bullet hits shouldn't trigger the full dizzy wobble every time.
+    if (amount >= 0.5 || Math.random() < 0.25) this.model.character.hit();
     this.drawLabel();
-    if (this.hp <= 0) {
+    if (this.hp <= 0.001) {
+      this.hp = 0;
       this.alive = false;
       this.sinkT = 0;
       this.deaths++;
       this.weapon = null;
+      this.model.setMount(null);
       return true;
     }
     return false;
@@ -171,12 +178,11 @@ export class Boat {
 
     this.protectT = Math.max(0, this.protectT - dt);
     this.shieldT = Math.max(0, this.shieldT - dt);
-    this.turboT = Math.max(0, this.turboT - dt);
+    this.stunT = Math.max(0, this.stunT - dt);
     this.cooldown = Math.max(0, this.cooldown - dt);
     this.lastHitT = Math.max(0, this.lastHitT - dt);
     if (this.lastHitT <= 0) this.lastHitBy = null;
     if (this.weapon) this.weaponHeldT += dt;
-    for (const [k, v] of this.ramCooldown) this.ramCooldown.set(k, v - dt);
 
     const inp = this.input;
     const fx = Math.sin(this.heading), fz = Math.cos(this.heading);
@@ -184,22 +190,22 @@ export class Boat {
     let vF = this.vx * fx + this.vz * fz;
     let vL = this.vx * rx + this.vz * rz;
 
-    const turbo = this.turboT > 0;
-
     // Smooth the raw inputs: keyboard keys are on/off, this gives them analog-like ramps.
-    const steerIn = clamp(inp.steer, -1, 1);
+    // A harpooned boat is stunned: controls only partly respond.
+    const stun = this.stunT > 0 ? 0.2 : 1;
+    const steerIn = clamp(inp.steer, -1, 1) * stun;
     const recentring = Math.abs(steerIn) < Math.abs(this.steer) || steerIn * this.steer < 0;
     this.steer += (steerIn - this.steer) * damp(BOAT.steerResponse * (recentring ? 1.6 : 1), dt);
-    const throttleIn = turbo ? 1 : clamp(inp.throttle, -1, 1);
+    const throttleIn = clamp(inp.throttle, -1, 1) * stun;
     this.throttle += (throttleIn - this.throttle) * damp(BOAT.throttleResponse, dt);
     const thr = this.throttle;
 
     // Forward thrust tapers as speed approaches the cap: punchy launch, smooth top end.
-    const maxF = BOAT.maxSpeed * (turbo ? BOAT.turboMultiplier : 1);
+    const maxF = BOAT.maxSpeed;
     const prevVF = vF;
     if (thr > 0.02) {
       const t = clamp(vF / maxF, 0, 1);
-      vF += thr * BOAT.accel * (turbo ? BOAT.turboAccel : 1) * (1 - t * t) * dt;
+      vF += thr * BOAT.accel * (1 - t * t) * dt;
     } else if (thr < -0.02) {
       if (vF > 0.3) vF += thr * BOAT.brake * dt;
       else {
@@ -208,7 +214,7 @@ export class Boat {
       }
     }
     vF *= Math.exp(-(Math.abs(thr) < 0.05 ? BOAT.coastDrag : BOAT.baseDrag) * dt);
-    // Knockbacks and turbo can push past the cap: bleed the excess off instead of hard-clamping.
+    // Knockbacks and pulls can push past the cap: bleed the excess off instead of hard-clamping.
     if (vF > maxF) vF += (maxF - vF) * damp(2.5, dt);
     if (vF < -BOAT.reverseSpeed) vF += (-BOAT.reverseSpeed - vF) * damp(2.5, dt);
     // Sideways slip decays: the hull slides a little through turns, like a real boat.
@@ -219,7 +225,7 @@ export class Boat {
     if (thr > 0.02 && vF > 0) vF += (before - Math.hypot(vF, vL)) * BOAT.cornerCarry * thr;
 
     // Yaw with inertia. Turning authority depends on speed: paddles can pivot a stopped boat
-    // slowly, it's sharpest at cruising speed and widens a bit at top speed / turbo.
+    // slowly, it's sharpest at cruising speed and widens a bit above top speed.
     const s = Math.abs(vF) / BOAT.maxSpeed;
     const authority = 0.35 + 0.65 * Math.min(1, s / 0.45) - Math.max(0, s - 0.8) * 0.5;
     const dir = vF < -0.5 ? -1 : 1;
@@ -296,12 +302,18 @@ export class Boat {
     roundRect(c, x0 - 5, 44, total + 10, 22, 11);
     c.fill();
     for (let i = 0; i < MAX_HP; i++) {
-      c.fillStyle = i < this.hp ? '#ff4d6d' : '#28415a';
-      roundRect(c, x0 + i * (w + gap), 48, w, 14, 7);
+      const sx = x0 + i * (w + gap);
+      c.fillStyle = '#28415a';
+      roundRect(c, sx, 48, w, 14, 7);
       c.fill();
-      if (i < this.hp) {
+      // Segments fill partially: bullets chip health away gradually.
+      const f = Math.min(1, Math.max(0, this.hp - i));
+      if (f > 0.02) {
+        c.fillStyle = '#ff4d6d';
+        roundRect(c, sx, 48, Math.max(8, w * f), 14, 7);
+        c.fill();
         c.fillStyle = 'rgba(255,255,255,0.45)';
-        roundRect(c, x0 + i * (w + gap) + 4, 50, w - 8, 4, 2);
+        roundRect(c, sx + 4, 50, Math.max(2, w * f - 8), 4, 2);
         c.fill();
       }
     }

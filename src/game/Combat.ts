@@ -1,12 +1,16 @@
 import * as THREE from 'three';
-import { PICKUP_RESPAWN_SECONDS, WEAPONS, WEAPON_TUNING as T, type WeaponId } from './config';
+import { PICKUP_RESPAWN_SECONDS, WEAPONS, WEAPON_ORDER, WEAPON_TUNING as T, type WeaponDef, type WeaponId } from './config';
 import type { Boat } from './Boat';
 import type { Arena } from './Arena';
 import type { Particles } from './Particles';
-import { coconutModel, pickupModel, pufferModel, tidalRingMaterial, urchinModel } from './Models';
+import { animateCrate, crateModel } from './Models';
 import { angleDiff, pickWeighted } from './util';
 import { waveHeight } from './waves';
 import { Sfx } from './Audio';
+import { BulletLayer } from './weapons/bullets';
+import { Cannonball, Harpoon, MortarShell, Torpedo } from './weapons/projectiles';
+import { DepthCharge, FakeCrate, NavalMine } from './weapons/traps';
+import { Drone, Flail, Maelstrom } from './weapons/specials';
 
 export interface CombatHost {
   readonly boats: Boat[];
@@ -20,34 +24,23 @@ export interface CombatHost {
   onPickup(boat: Boat, weapon: WeaponId): void;
 }
 
-interface Projectile {
-  kind: 'cannon' | 'torpedo';
-  owner: Boat;
+/** Something bots should steer around (mines, whirlpools, spinning flails, fake crates...). */
+export interface Hazard {
   x: number;
   z: number;
-  heading: number;
-  speed: number;
-  life: number;
-  target: Boat | null;
-  mesh: THREE.Object3D;
-  trailT: number;
+  r: number;
+  owner: Boat | null;
+  /** Fake crates look like pickups: gullible bots drive straight at them. */
+  fake?: boolean;
 }
 
-interface Mine {
-  owner: Boat;
-  x: number;
-  z: number;
-  t: number;
-  mesh: THREE.Object3D;
-  tipMat: THREE.MeshBasicMaterial;
-  ring: THREE.Mesh;
-}
-
-interface Ring {
-  mesh: THREE.Mesh;
-  t: number;
-  max: number;
-  radius: number;
+/** A live weapon object in the world. Return false from update() when finished. */
+export interface WeaponFx {
+  update(dt: number): boolean;
+  dispose(): void;
+  hazard?(): Hazard | null;
+  /** True if this is an incoming attack near `b` (bots raise their Hydro-Barrier). */
+  threatens?(b: Boat): boolean;
 }
 
 interface Pickup {
@@ -56,47 +49,46 @@ interface Pickup {
   active: boolean;
   timer: number;
   obj: THREE.Group;
-  barrel: THREE.Mesh;
+  crate: THREE.Mesh;
   badge: THREE.Sprite;
   ring: THREE.Mesh;
   /** 0..1 pop-in animation after respawning. */
   appear: number;
 }
 
-const tipIdle = new THREE.Color(0xff6fb0);
-const tipArmed = new THREE.Color(0xff2d55);
-
-/** For per-instance effect meshes (own geometry + material; textures are shared and kept). */
-function disposeMesh(m: THREE.Mesh): void {
-  m.geometry.dispose();
-  (m.material as THREE.Material).dispose();
-}
-
 export class Combat {
   readonly group = new THREE.Group();
-  readonly projectiles: Projectile[] = [];
-  readonly mines: Mine[] = [];
   readonly pickups: Pickup[] = [];
-  private rings: Ring[] = [];
-  private weaponList = Object.values(WEAPONS);
+  readonly bullets: BulletLayer;
+  private fx: WeaponFx[] = [];
+  private pool: WeaponDef[] = WEAPON_ORDER.map((id) => WEAPONS[id]);
 
-  constructor(private host: CombatHost) {
+  constructor(readonly host: CombatHost) {
     for (const s of host.arena.pickupSpots) {
-      const m = pickupModel();
+      const m = crateModel(false);
       m.obj.position.set(s.x, 0, s.z);
       m.ring.position.set(s.x, 0.05, s.z);
       this.group.add(m.obj, m.ring);
       this.pickups.push({ x: s.x, z: s.z, active: true, timer: 0, ...m, appear: 1 });
     }
+    this.bullets = new BulletLayer(this);
+    this.group.add(this.bullets.mesh);
+  }
+
+  get time(): number {
+    return this.host.time;
+  }
+
+  /** Which weapons crates can roll (the Arsenal screen). Empty means everything. */
+  setArsenal(ids: WeaponId[]): void {
+    const list = ids.filter((id) => WEAPONS[id]).map((id) => WEAPONS[id]);
+    this.pool = list.length ? list : WEAPON_ORDER.map((id) => WEAPONS[id]);
   }
 
   reset(): void {
-    for (const p of this.projectiles) this.group.remove(p.mesh);
-    for (const m of this.mines) this.group.remove(m.mesh, m.ring);
-    for (const r of this.rings) this.group.remove(r.mesh);
-    this.projectiles.length = 0;
-    this.mines.length = 0;
-    this.rings.length = 0;
+    for (const f of this.fx) f.dispose();
+    this.fx.length = 0;
+    this.bullets.clear();
     for (const p of this.pickups) {
       p.active = true;
       p.appear = 1;
@@ -104,74 +96,53 @@ export class Combat {
     }
   }
 
-  /** Fires/uses the boat's current weapon. Returns true if something happened. */
-  useWeapon(b: Boat): boolean {
-    if (!b.alive || !b.weapon || b.cooldown > 0) return false;
-    const h = this.host;
-    const dist = h.listenerDist(b.x, b.z);
-    switch (b.weapon) {
-      case 'cannon': {
-        const target = this.findTarget(b, 0.22, 48);
-        let heading = b.heading;
-        if (target) {
-          // Aim assist with simple lead.
-          const t = Math.hypot(target.x - b.x, target.z - b.z) / T.cannonSpeed;
-          heading = Math.atan2(target.x + target.vx * t - b.x, target.z + target.vz * t - b.z);
-        }
-        this.spawnProjectile('cannon', b, heading, T.cannonSpeed + b.speed * 0.5, T.cannonLife, null);
-        b.cooldown = T.cannonCooldown;
-        h.particles.muzzle(b.x + b.forwardX * 1.55, b.y + 0.25, b.z + b.forwardZ * 1.55);
-        Sfx.fire(dist);
-        break;
-      }
-      case 'torpedo': {
-        const target = this.findTarget(b, 0.9, 70);
-        this.spawnProjectile('torpedo', b, b.heading, T.torpedoSpeed, T.torpedoLife, target);
-        b.cooldown = 0.5;
-        h.particles.splash(b.x + b.forwardX * 1.8, b.y - 0.3, b.z + b.forwardZ * 1.8, 0.5);
-        Sfx.fire(dist);
-        break;
-      }
-      case 'mine': {
-        const m = urchinModel();
-        const x = b.x - b.forwardX * 2.4, z = b.z - b.forwardZ * 2.4;
-        m.obj.position.set(x, 0, z);
-        m.ring.position.set(x, 0.05, z);
-        this.group.add(m.obj, m.ring);
-        this.mines.push({ owner: b, x, z, t: 0, mesh: m.obj, tipMat: m.tipMat, ring: m.ring });
-        b.cooldown = 0.5;
-        h.particles.splash(x, 0, z, 0.6);
-        Sfx.splash(dist);
-        break;
-      }
-      case 'tidal':
-        this.tidal(b);
-        break;
-      case 'shield':
-        b.shieldT = T.shieldSeconds;
-        h.particles.sparkle(b.x, b.y + 1, b.z, 0xbff4ff);
-        Sfx.shield();
-        break;
-      case 'turbo':
-        b.turboT = T.turboSeconds;
-        h.particles.splash(b.x - b.forwardX * 1.4, b.y, b.z - b.forwardZ * 1.4, 0.8);
-        Sfx.turbo();
-        break;
-    }
-    b.useAmmo();
-    return true;
+  add(f: WeaponFx): void {
+    this.fx.push(f);
   }
 
-  /** Nearest living enemy within `cone` radians of the boat's heading and `range` units. */
-  findTarget(b: Boat, cone: number, range: number): Boat | null {
+  // ---------------------------------------------------------------- queries used by weapons & bots
+
+  waveY(x: number, z: number): number {
+    return waveHeight(x, z, this.host.time, this.host.arena.map.waveAmp);
+  }
+
+  blocked(x: number, z: number): boolean {
+    return !this.host.arena.isFree(x, z, 0);
+  }
+
+  /** First living boat (other than `exclude`) whose hull overlaps a circle of radius `pad` at (x,z). */
+  hitTest(x: number, z: number, pad: number, exclude: Boat | null): Boat | null {
+    for (const b of this.host.boats) {
+      if (b === exclude || !b.alive) continue;
+      const r = b.radius + pad;
+      if ((b.x - x) ** 2 + (b.z - z) ** 2 < r * r) return b;
+    }
+    return null;
+  }
+
+  hazards(): Hazard[] {
+    const out: Hazard[] = [];
+    for (const f of this.fx) {
+      const h = f.hazard?.();
+      if (h) out.push(h);
+    }
+    return out;
+  }
+
+  threatNear(b: Boat): boolean {
+    return this.bullets.threatens(b) || this.fx.some((f) => f.threatens?.(b));
+  }
+
+  /** Nearest living enemy within `cone` radians of `heading` and `range` units. */
+  findTarget(b: Boat, heading: number, cone: number, range: number, minRange = 0): Boat | null {
     let best: Boat | null = null;
     let bestScore = Infinity;
     for (const o of this.host.boats) {
       if (o === b || !o.alive) continue;
       const dx = o.x - b.x, dz = o.z - b.z;
       const d = Math.hypot(dx, dz);
-      if (d > range) continue;
-      const ang = Math.abs(angleDiff(b.heading, Math.atan2(dx, dz)));
+      if (d > range || d < minRange) continue;
+      const ang = Math.abs(angleDiff(heading, Math.atan2(dx, dz)));
       if (ang > cone) continue;
       const score = d * (1 + ang * 2);
       if (score < bestScore) {
@@ -182,43 +153,40 @@ export class Combat {
     return best;
   }
 
-  private spawnProjectile(kind: Projectile['kind'], owner: Boat, heading: number, speed: number, life: number, target: Boat | null) {
-    const mesh = kind === 'cannon' ? coconutModel() : pufferModel();
-    const x = owner.x + Math.sin(heading) * 1.8, z = owner.z + Math.cos(heading) * 1.8;
-    mesh.position.set(x, owner.y + 0.6, z);
-    this.group.add(mesh);
-    this.projectiles.push({ kind, owner, x, z, heading, speed, life, target, mesh, trailT: 0 });
+  /** Aim assist: heading toward the best target in the cone (with lead), else `heading` unchanged. */
+  aim(b: Boat, heading: number, cone: number, range: number, speed: number): { heading: number; target: Boat | null } {
+    const target = this.findTarget(b, heading, cone, range);
+    if (!target) return { heading, target: null };
+    const t = Math.hypot(target.x - b.x, target.z - b.z) / speed;
+    return { heading: Math.atan2(target.x + target.vx * t - b.x, target.z + target.vz * t - b.z), target };
   }
 
-  private tidal(b: Boat): void {
-    const h = this.host;
-    const ring = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), tidalRingMaterial());
-    ring.rotation.x = -Math.PI / 2;
-    ring.position.set(b.x, b.y - 0.2, b.z);
-    ring.renderOrder = 4;
-    this.group.add(ring);
-    this.rings.push({ mesh: ring, t: 0, max: 0.65, radius: T.tidalRadius });
-    for (let i = 0; i < 36; i++) {
-      const a = (i / 36) * Math.PI * 2;
-      h.particles.emit(b.x + Math.cos(a) * 2, b.y, b.z + Math.sin(a) * 2, 1, 0xe6f8ff, { speed: 16, up: 6, life: 0.7, size: 0.55, drag: 1.2 });
+  /** Damage + knockback, unless the target is shielded. Returns true if it landed. */
+  hit(target: Boat, dmg: number, owner: Boat | null, icon: string, kx = 0, kz = 0): boolean {
+    if (!target.alive) return false;
+    if (!target.invulnerable) {
+      target.vx += kx;
+      target.vz += kz;
     }
-    h.particles.splash(b.x, b.y, b.z, 1.8);
-    for (const o of h.boats) {
-      if (o === b || !o.alive) continue;
-      const dx = o.x - b.x, dz = o.z - b.z;
-      const d = Math.hypot(dx, dz);
-      if (d > T.tidalRadius) continue;
-      const push = T.tidalPush * (1 - (d / T.tidalRadius) * 0.5);
-      o.vx += (dx / (d || 1)) * push;
-      o.vz += (dz / (d || 1)) * push;
-      h.damage(o, T.tidalDamage, b, WEAPONS.tidal.icon);
-    }
-    Sfx.splash(0);
-    Sfx.boom(h.listenerDist(b.x, b.z));
-    h.shake(0.4 * Math.max(0, 1 - h.listenerDist(b.x, b.z) / 30));
+    const landed = !target.invulnerable;
+    this.host.damage(target, dmg, owner, icon);
+    return landed;
   }
 
-  private explode(x: number, z: number, y: number, big: boolean): void {
+  /** Blast damage to every boat within `r`, pushed outward. Returns how many were hit. */
+  damageArea(x: number, z: number, r: number, dmg: number, owner: Boat | null, icon: string, knock: number, spareOwner: boolean): number {
+    let n = 0;
+    for (const b of this.host.boats) {
+      if (!b.alive || (spareOwner && b === owner)) continue;
+      const d = Math.hypot(b.x - x, b.z - z);
+      if (d > r + b.radius * 0.5) continue;
+      const k = knock * (1 - Math.min(1, d / (r + 1)) * 0.5);
+      if (this.hit(b, dmg, owner, icon, ((b.x - x) / (d || 1)) * k, ((b.z - z) / (d || 1)) * k)) n++;
+    }
+    return n;
+  }
+
+  explode(x: number, y: number, z: number, big: boolean): void {
     const h = this.host;
     h.particles.explosion(x, y, z, big);
     const d = h.listenerDist(x, z);
@@ -226,123 +194,149 @@ export class Combat {
     h.shake((big ? 0.6 : 0.25) * Math.max(0, 1 - d / 35));
   }
 
+  // ---------------------------------------------------------------- firing
+
+  /** Fires/uses the boat's current weapon. Returns true if something happened. */
+  useWeapon(b: Boat): boolean {
+    if (!b.alive || !b.weapon || b.cooldown > 0) return false;
+    const h = this.host;
+    const P = h.particles;
+    const dist = h.listenerDist(b.x, b.z);
+    const fx = b.forwardX, fz = b.forwardZ;
+    const rx = -fz, rz = fx; // starboard (right) vector
+    switch (b.weapon) {
+      case 'torpedoes': {
+        const target = this.findTarget(b, b.heading, 0.5, 60);
+        for (const s of [-1, 1]) {
+          const x = b.x + fx * 1.2 + rx * s * 0.55, z = b.z + fz * 1.2 + rz * s * 0.55;
+          this.add(new Torpedo(this, b, x, z, b.heading + s * 0.035, target));
+          P.splash(x, b.y - 0.35, z, 0.4);
+        }
+        b.cooldown = T.torpedoes.cooldown;
+        Sfx.launch(dist);
+        break;
+      }
+      case 'broadside': {
+        for (const side of [-1, 1]) {
+          const base = b.heading - side * (Math.PI / 2); // side +1 = starboard, -1 = port
+          const { heading, target } = this.aim(b, base, T.broadside.cone, T.broadside.range, T.broadside.speed);
+          const x = b.x + Math.sin(base) * 1.05, z = b.z + Math.cos(base) * 1.05;
+          const range = target ? Math.hypot(target.x - x, target.z - z) : 22;
+          this.add(new Cannonball(this, b, x, b.y + 0.3, z, heading, range));
+          P.muzzle(x, b.y + 0.3, z);
+        }
+        b.cooldown = T.broadside.cooldown;
+        Sfx.fire(dist);
+        Sfx.fire(dist + 8);
+        if (dist < 1) h.shake(0.2);
+        break;
+      }
+      case 'mines': {
+        this.add(new NavalMine(this, b, b.x - fx * 2.4, b.z - fz * 2.4));
+        b.cooldown = 0.5;
+        Sfx.splash(dist);
+        break;
+      }
+      case 'barrier':
+        b.shieldT = T.barrier.seconds;
+        P.sparkle(b.x, b.y + 1, b.z, 0xbff4ff);
+        Sfx.shield();
+        break;
+      case 'fakeCrate': {
+        this.add(new FakeCrate(this, b, b.x - fx * 2.8, b.z - fz * 2.8));
+        b.cooldown = 0.5;
+        Sfx.splash(dist);
+        break;
+      }
+      case 'mortar': {
+        const M = T.mortar;
+        const target = this.findTarget(b, b.heading, 0.75, M.maxRange);
+        let tx: number, tz: number;
+        if (target) {
+          tx = target.x + target.vx * M.flight * 0.8;
+          tz = target.z + target.vz * M.flight * 0.8;
+        } else {
+          tx = b.x + fx * 22;
+          tz = b.z + fz * 22;
+        }
+        // Keep the landing point within the mortar's range band.
+        const dx = tx - b.x, dz = tz - b.z;
+        const d = Math.hypot(dx, dz) || 1;
+        const clamped = Math.min(M.maxRange, Math.max(M.minRange, d));
+        tx = b.x + (dx / d) * clamped;
+        tz = b.z + (dz / d) * clamped;
+        this.add(new MortarShell(this, b, b.x + fx * 1.0, b.y + 0.6, b.z + fz * 1.0, tx, tz));
+        P.muzzle(b.x + fx * 1.0, b.y + 0.8, b.z + fz * 1.0);
+        b.cooldown = 0.8;
+        Sfx.thump(dist);
+        break;
+      }
+      case 'deckGun': {
+        const G = T.deckGun;
+        const { heading } = this.aim(b, b.heading, 0.25, 36, G.speed);
+        const hd = heading + (Math.random() - 0.5) * 2 * G.spread;
+        const mx = b.x + fx * 1.5, mz = b.z + fz * 1.5;
+        this.bullets.fire(b, mx, b.y + 0.22, mz, hd, G.speed, G.life, G.damage, 'deckGun');
+        P.emit(mx, b.y + 0.22, mz, 1, 0xffd27a, { glow: true, speed: 0.5, up: 0.3, life: 0.08, size: 0.7, gravity: 0 });
+        b.model.spinGun();
+        b.cooldown = G.interval;
+        Sfx.gun(dist);
+        break;
+      }
+      case 'maelstrom': {
+        const M = T.maelstrom;
+        const target = this.findTarget(b, b.heading, 0.5, 28);
+        let cx = target ? target.x + target.vx * 0.6 : b.x + fx * M.distance;
+        let cz = target ? target.z + target.vz * 0.6 : b.z + fz * M.distance;
+        // Pull the centre back toward the boat until it sits on open water.
+        for (let i = 0; i < 10 && !this.host.arena.isFree(cx, cz, 2); i++) {
+          cx += (b.x - cx) * 0.2;
+          cz += (b.z - cz) * 0.2;
+        }
+        this.add(new Maelstrom(this, b, cx, cz));
+        Sfx.swirl(h.listenerDist(cx, cz));
+        break;
+      }
+      case 'depthCharges': {
+        const D = T.depthCharges;
+        const offsets = [[0, -2.6], [-1.7, -4.2], [1.7, -4.2]];
+        offsets.forEach(([side, back], i) => {
+          this.add(new DepthCharge(this, b, b.x + fx * back + rx * side, b.z + fz * back + rz * side, D.fuse + i * D.stagger));
+        });
+        Sfx.splash(dist);
+        break;
+      }
+      case 'harpoon': {
+        const { heading } = this.aim(b, b.heading, 0.25, 38, T.harpoon.speed);
+        this.add(new Harpoon(this, b, heading));
+        b.cooldown = 0.9;
+        Sfx.twang(dist);
+        break;
+      }
+      case 'flail':
+        this.add(new Flail(this, b));
+        Sfx.whoosh(dist);
+        break;
+      case 'drone':
+        this.add(new Drone(this, b));
+        P.splash(b.x + rx * 2.5, b.y - 0.3, b.z + rz * 2.5, 0.6);
+        Sfx.beep();
+        break;
+    }
+    b.useAmmo();
+    return true;
+  }
+
+  // ---------------------------------------------------------------- frame
+
   update(dt: number): void {
     const h = this.host;
     const time = h.time;
-    const amp = h.arena.map.waveAmp;
-
-    for (let i = this.projectiles.length - 1; i >= 0; i--) {
-      const p = this.projectiles[i];
-      p.life -= dt;
-      p.trailT -= dt;
-      if (p.kind === 'torpedo' && p.target && p.target.alive) {
-        const want = Math.atan2(p.target.x - p.x, p.target.z - p.z);
-        const d = angleDiff(p.heading, want);
-        p.heading += Math.max(-T.torpedoTurn * dt, Math.min(T.torpedoTurn * dt, d));
-      }
-      p.x += Math.sin(p.heading) * p.speed * dt;
-      p.z += Math.cos(p.heading) * p.speed * dt;
-      const wy = waveHeight(p.x, p.z, time, amp);
-      const m = p.mesh;
-      if (p.kind === 'cannon') {
-        m.position.set(p.x, wy + 0.9, p.z);
-        m.rotation.set(m.rotation.x + dt * 14, p.heading, 0);
-        if (p.trailT <= 0) {
-          p.trailT = 0.03;
-          h.particles.emit(p.x, wy + 0.9, p.z, 1, 0xe9edf2, { speed: 0.3, up: 0.4, life: 0.45, size: 0.45, gravity: -0.5, grow: 1.8, alpha: 0.55 });
-        }
-      } else {
-        // Puffers swim: wiggle, bob and puff up rhythmically.
-        m.position.set(p.x, wy + 0.32 + Math.abs(Math.sin(time * 9)) * 0.08, p.z);
-        m.rotation.set(0, p.heading + Math.sin(time * 18) * 0.18, Math.sin(time * 9) * 0.1);
-        m.scale.setScalar(1 + Math.sin(time * 6) * 0.06);
-        if (p.trailT <= 0) {
-          p.trailT = 0.04;
-          h.particles.emit(p.x, wy + 0.1, p.z, 1, 0xffffff, { speed: 0.6, up: 1.2, life: 0.6, size: 0.25, gravity: -1, alpha: 0.8 });
-        }
-      }
-
-      let hit: Boat | null = null;
-      for (const b of h.boats) {
-        if (b === p.owner || !b.alive) continue;
-        const r = b.radius + (p.kind === 'cannon' ? 0.4 : 0.6);
-        if ((b.x - p.x) ** 2 + (b.z - p.z) ** 2 < r * r) {
-          hit = b;
-          break;
-        }
-      }
-      const blocked = !h.arena.isFree(p.x, p.z, 0);
-      if (hit || blocked || p.life <= 0) {
-        if (hit) {
-          h.damage(hit, p.kind === 'cannon' ? T.cannonDamage : T.torpedoDamage, p.owner, WEAPONS[p.kind].icon);
-          hit.vx += Math.sin(p.heading) * T.hitKnockback;
-          hit.vz += Math.cos(p.heading) * T.hitKnockback;
-          this.explode(p.x, p.z, wy + 0.5, p.kind === 'torpedo');
-        } else if (blocked) {
-          this.explode(p.x, p.z, wy + 0.5, false);
-        } else {
-          h.particles.splash(p.x, wy, p.z, 0.7);
-          Sfx.splash(h.listenerDist(p.x, p.z));
-        }
-        this.group.remove(p.mesh);
-        this.projectiles.splice(i, 1);
-      }
-    }
-
-    for (let i = this.mines.length - 1; i >= 0; i--) {
-      const m = this.mines[i];
-      m.t += dt;
-      const wy = waveHeight(m.x, m.z, time, amp);
-      m.mesh.position.y = wy + 0.05 + Math.sin(m.t * 3) * 0.08;
-      m.mesh.rotation.y += dt * 0.8;
-      m.ring.position.y = wy + 0.06;
-      const armed = m.t > T.mineArm;
-      const pulse = 0.5 + 0.5 * Math.sin(m.t * (armed ? 9 : 3));
-      m.tipMat.color.copy(armed ? tipArmed : tipIdle).multiplyScalar(0.7 + pulse * 0.6);
-      (m.ring.material as THREE.MeshBasicMaterial).opacity = armed ? 0.25 + pulse * 0.45 : 0;
-      let trigger = m.t > T.mineLife;
-      if (!trigger && armed) {
-        for (const b of h.boats) {
-          if (!b.alive || (b === m.owner && m.t < 1.5)) continue;
-          if ((b.x - m.x) ** 2 + (b.z - m.z) ** 2 < (T.mineRadius + b.radius) ** 2) {
-            trigger = true;
-            break;
-          }
-        }
-      }
-      if (trigger) {
-        if (m.t <= T.mineLife) {
-          for (const b of h.boats) {
-            if (!b.alive) continue;
-            const d = Math.hypot(b.x - m.x, b.z - m.z);
-            if (d < 4.5) {
-              h.damage(b, T.mineDamage, m.owner, WEAPONS.mine.icon);
-              b.vx += ((b.x - m.x) / (d || 1)) * T.mineKnockback;
-              b.vz += ((b.z - m.z) / (d || 1)) * T.mineKnockback;
-            }
-          }
-          this.explode(m.x, m.z, wy + 0.4, true);
-        } else {
-          h.particles.splash(m.x, wy, m.z, 0.5);
-        }
-        this.group.remove(m.mesh, m.ring);
-        disposeMesh(m.ring);
-        m.tipMat.dispose();
-        this.mines.splice(i, 1);
-      }
-    }
-
-    for (let i = this.rings.length - 1; i >= 0; i--) {
-      const r = this.rings[i];
-      r.t += dt;
-      const k = r.t / r.max;
-      r.mesh.scale.setScalar(1 + k * r.radius);
-      r.mesh.position.y = waveHeight(r.mesh.position.x, r.mesh.position.z, time, amp) + 0.15;
-      (r.mesh.material as THREE.MeshBasicMaterial).opacity = 1 - k * k;
-      if (k >= 1) {
-        this.group.remove(r.mesh);
-        disposeMesh(r.mesh);
-        this.rings.splice(i, 1);
+    this.bullets.update(dt);
+    for (let i = this.fx.length - 1; i >= 0; i--) {
+      if (!this.fx[i].update(dt)) {
+        this.fx[i].dispose();
+        this.fx.splice(i, 1);
       }
     }
 
@@ -357,26 +351,17 @@ export class Combat {
         }
         continue;
       }
-      p.appear = Math.min(1, p.appear + dt * 3);
-      const pop = p.appear < 1 ? 1 + Math.sin(p.appear * Math.PI) * 0.35 : 1;
-      const wy = waveHeight(p.x, p.z, time, amp);
-      p.obj.position.y = wy + 0.35 + Math.sin(time * 2 + p.x) * 0.15;
-      p.obj.scale.setScalar(p.appear * pop);
-      p.barrel.rotation.set(Math.sin(time * 1.7 + p.z) * 0.12, p.barrel.rotation.y + dt * 1.1, Math.cos(time * 1.3 + p.x) * 0.1);
-      p.badge.position.y = 1.55 + Math.sin(time * 3 + p.x) * 0.08;
-      p.ring.position.y = wy + 0.06;
-      const rs = 1 + 0.08 * Math.sin(time * 3 + p.z);
-      p.ring.scale.set(rs, rs, 1);
+      animateCrate(p, this.waveY(p.x, p.z), time, dt);
       for (const b of h.boats) {
         if (!b.alive || b.weapon) continue;
         if ((b.x - p.x) ** 2 + (b.z - p.z) ** 2 < (b.radius + 1.3) ** 2) {
-          const w = pickWeighted(this.weaponList).id;
+          const w = pickWeighted(this.pool).id;
           b.giveWeapon(w);
           p.active = false;
           p.timer = PICKUP_RESPAWN_SECONDS;
           p.obj.visible = p.ring.visible = false;
           h.particles.sparkle(p.x, 1, p.z);
-          h.particles.splash(p.x, wy, p.z, 0.6);
+          h.particles.splash(p.x, this.waveY(p.x, p.z), p.z, 0.6);
           h.onPickup(b, w);
           break;
         }
@@ -384,3 +369,4 @@ export class Combat {
     }
   }
 }
+

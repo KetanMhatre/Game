@@ -59,8 +59,10 @@ src/
     Sky.ts             gradient sky dome + clouds
     Wake.ts            foam wake ribbons
     waves.ts           wave function shared by GPU shader and CPU bobbing
-    Models.ts          coconut, puffer, urchin and pickup-barrel models
-    Combat.ts          projectiles, mines, tidal splash, pickups
+    Models.ts          weapon, crate, drone and whirlpool models
+    Combat.ts          weapon dispatch, aim assist, damage/blast helpers, crates, arsenal pool
+    weapons/           one class per live weapon object: bullets, projectiles (torpedo, cannonball,
+                       mortar, harpoon), traps (mine, fake crate, depth charge), specials (maelstrom, flail, drone)
     Bot.ts             AI: grab barrel → hunt → avoid obstacles → unstick
     Input.ts           keyboard / mouse / touch joystick
     Particles.ts       soft sprite particles (normal + glow layers)
@@ -73,16 +75,24 @@ src/
 
 ## Weapons
 
-| Weapon | Effect |
-|---|---|
-| Coconut Cannon | 3 shots forward, light aim assist |
-| Puffer Torpedo | Homing, 2 damage |
-| Urchin Mine | Drop behind you, 2 damage blast |
-| Tidal Splash | Shockwave around you, knocks boats back |
-| Bubble Shield | 6 s invulnerability |
-| Turbo Paddle | Speed burst, ramming deals damage |
+Weapons come from floating "?" crates. Players can choose which weapons crates may roll on the **Arsenal** screen (menu → Arsenal), using All ON, All OFF and Randomize.
 
-Boats have 3 hearts. Sink = +1 point. Respawn after 3 s with 2 s of spawn protection.
+| Weapon | Effect | Damage |
+|---|---|---|
+| Torpedoes | 2 fast torpedoes per shot, gently homing (2 shots) | 1 each |
+| Broadside Cannon | Cannonballs arc out of **both sides**, aim-assisted at rivals alongside (3 volleys) | 1 |
+| Naval Mines | Horned mine with blinking beacon, dropped behind. Arms after 0.6 s. Safe for its owner for 1.5 s (2 mines) | 2 |
+| Hydro-Barrier | Hexagon bubble: blocks damage, knockback and hooks for 6 s | – |
+| Fake Crate | Looks like a pickup (tell: pink "?" with a dark-red outline). Explodes on whoever grabs it. Gullible bots fall for it | 2 |
+| Sea Mortar | High-arc shell onto the nearest rival ahead, with a red landing marker (2 shells) | 1.5 area |
+| Deck Gun | Hold fire: 30 tracer rounds from a spinning gatling | 0.12 per bullet |
+| Maelstrom | Whirlpool that pulls rivals in, spins them and drains health in its core for 6 s | up to 2.4 |
+| Depth Charges | 3 charges sink behind you, then erupt as geysers | 1 each |
+| Harpoon Hook | Spears a rival, yanks them toward you and stuns their controls for 0.8 s (2 shots) | 1 |
+| Sea Flail | Spiked ball on a chain spins around your boat for 5 s | 1 per hit |
+| Patrol Drone | Mini gunboat circles you for 10 s, shooting rivals within 26 units | 0.2 per bullet |
+
+Boats have 3 hearts. Fractional damage drains the bar smoothly. Sink = +1 point. Respawn after 3 s with 2 s of spawn protection. The held weapon shows on the boat: a gatling, harpoon launcher, mortar tube, side cannons or torpedo tubes, otherwise a small bow cannon. All numbers are in `WEAPON_TUNING` in `src/game/config.ts`.
 
 ## CrazyGames integration checklist
 

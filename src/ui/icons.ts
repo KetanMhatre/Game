@@ -13,39 +13,133 @@ function spikes(cx: number, cy: number, rIn: number, rOut: number, n: number): s
 
 const svg = (body: string) => `<svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">${body}</svg>`;
 
+/** Archimedean spiral as a polyline path. */
+function spiral(cx: number, cy: number, turns: number, r0: number, r1: number): string {
+  const steps = Math.round(turns * 28);
+  const pts: string[] = [];
+  for (let i = 0; i <= steps; i++) {
+    const t = i / steps;
+    const a = t * turns * Math.PI * 2;
+    const r = r0 + (r1 - r0) * t;
+    pts.push(`${(cx + Math.cos(a) * r).toFixed(1)},${(cy + Math.sin(a) * r).toFixed(1)}`);
+  }
+  return 'M' + pts.join(' L');
+}
+
+const torpedoBody = (y: number) =>
+  `<rect x="5" y="${y}" width="38" height="12" rx="6" fill="#b8c4cf"/>
+   <path d="M40 ${y}h5c6 0 10 2.7 10 6s-4 6-10 6h-5z" fill="#ff7a2e"/>
+   <path d="M9 ${y}L3 ${y - 5}v22l6-5z" fill="#6c7a88"/>`;
+
 const ICONS: Record<string, string> = {
-  cannon: svg(
-    `<circle cx="32" cy="34" r="22" fill="#7a4a24" stroke="${INK}" stroke-width="4"/>
-     <path d="M17 29c3-8 11-12 19-11" stroke="#b07d46" stroke-width="4" fill="none" stroke-linecap="round"/>
-     <circle cx="25" cy="38" r="4" fill="#2a170a"/><circle cx="39" cy="38" r="4" fill="#2a170a"/><circle cx="32" cy="48" r="4" fill="#2a170a"/>`,
+  // ---- weapons (keys match WeaponId) ----
+  torpedoes: svg(
+    `<g transform="rotate(-32 32 32)">
+       <g stroke="${INK}" stroke-width="3" stroke-linejoin="round">${torpedoBody(13)}${torpedoBody(38)}</g>
+       <path d="M12 16.5h24M12 41.5h24" stroke="#fff" stroke-width="2.2" stroke-linecap="round" opacity=".75"/></g>
+     <circle cx="8" cy="54" r="3" fill="#c8f2ff" stroke="${INK}" stroke-width="2"/>
+     <circle cx="15" cy="59" r="2" fill="#c8f2ff" stroke="${INK}" stroke-width="1.6"/>
+     <circle cx="4" cy="46" r="2" fill="#c8f2ff" stroke="${INK}" stroke-width="1.6"/>`,
   ),
-  torpedo: svg(
-    `<polygon points="${spikes(30, 33, 17, 26, 12)}" fill="#fff0c0" stroke="${INK}" stroke-width="3" stroke-linejoin="round"/>
-     <circle cx="30" cy="33" r="18" fill="#ffcf3a" stroke="${INK}" stroke-width="3.5"/>
-     <path d="M47 33l11-8v16z" fill="#ff9a2e" stroke="${INK}" stroke-width="3" stroke-linejoin="round"/>
-     <circle cx="24" cy="28" r="6.5" fill="#fff" stroke="${INK}" stroke-width="3"/><circle cx="22.5" cy="28.5" r="3.2" fill="${INK}"/>
-     <circle cx="17" cy="39" r="3" fill="#ff7a2e" stroke="${INK}" stroke-width="2.5"/>`,
+  broadside: svg(
+    `<circle cx="51" cy="12" r="6" fill="#eef2f5" stroke="${INK}" stroke-width="2.5"/>
+     <circle cx="58" cy="17" r="4" fill="#eef2f5" stroke="${INK}" stroke-width="2.5"/>
+     <path d="M10 44h28l4 10H6z" fill="#a0683a" stroke="${INK}" stroke-width="3" stroke-linejoin="round"/>
+     <path d="M8 40l35-14c3-1 6 0 7 3s0 6-3 7L12 50z" fill="#3b4450" stroke="${INK}" stroke-width="3.5" stroke-linejoin="round"/>
+     <path d="M16 41l25-10" stroke="#8a96a3" stroke-width="2.5" stroke-linecap="round"/>
+     <circle cx="56" cy="26" r="5" fill="#2a2f36" stroke="${INK}" stroke-width="3"/>
+     <circle cx="14" cy="54" r="5.5" fill="#6d4526" stroke="${INK}" stroke-width="3"/>
+     <circle cx="34" cy="54" r="5.5" fill="#6d4526" stroke="${INK}" stroke-width="3"/>`,
   ),
-  mine: svg(
-    `<polygon points="${spikes(32, 32, 15, 29, 14)}" fill="#6a3d9a" stroke="${INK}" stroke-width="3" stroke-linejoin="round"/>
-     <circle cx="32" cy="32" r="16" fill="#4a2a6e" stroke="${INK}" stroke-width="3.5"/>
-     <circle cx="26" cy="26" r="4" fill="#ff6fb0"/><circle cx="37" cy="36" r="2.5" fill="#ff6fb0"/>`,
+  mines: svg(
+    `<path d="M46.7 29.5L52.8 26M17.3 29.5L11.2 26M49 38h7M15 38H8M46.7 46.5L52.8 50M17.3 46.5L11.2 50" stroke="${INK}" stroke-width="7" stroke-linecap="round"/>
+     <path d="M46.7 29.5L52.8 26M17.3 29.5L11.2 26M49 38h7M15 38H8M46.7 46.5L52.8 50M17.3 46.5L11.2 50" stroke="#3b4450" stroke-width="3.5" stroke-linecap="round"/>
+     <circle cx="32" cy="38" r="17" fill="#5f6b78" stroke="${INK}" stroke-width="4"/>
+     <path d="M15.5 41c10 4 23 4 33 0" stroke="${INK}" stroke-width="3" fill="none"/>
+     <ellipse cx="25" cy="31" rx="5" ry="3" fill="#fff" opacity=".45" transform="rotate(-30 25 31)"/>
+     <path d="M27 21.5h10V18a5 5 0 0 0-10 0z" fill="#ff3b3b" stroke="${INK}" stroke-width="2.5" stroke-linejoin="round"/>
+     <path d="M23 11l-3-3M41 11l3-3M32 8V4" stroke="#ff5a5a" stroke-width="3" stroke-linecap="round"/>`,
   ),
-  tidal: svg(
-    `<path d="M5 46c5-22 27-33 42-24 9 5 9 18-1 20-7 1-10-6-5-10-11-2-17 8-15 18H5z" fill="#3fa9ff" stroke="${INK}" stroke-width="3.5" stroke-linejoin="round"/>
-     <path d="M13 42c4-11 15-17 25-15" stroke="#c8f2ff" stroke-width="4" fill="none" stroke-linecap="round"/>
-     <path d="M5 56h54" stroke="${INK}" stroke-width="4" stroke-linecap="round"/>`,
+  barrier: svg(
+    `<circle cx="32" cy="32" r="26" fill="#8fe6ff" stroke="${INK}" stroke-width="4"/>
+     <path d="M12 28l4-7h8l4 7-4 7h-8zM36 46l4-7h8l4 7-4 7h-8z" fill="none" stroke="#e8fbff" stroke-width="2" opacity=".85"/>
+     <path d="M32 14l13 5v10c0 10-6 16-13 20-7-4-13-10-13-20V19z" fill="#fff" stroke="${INK}" stroke-width="3" stroke-linejoin="round"/>
+     <path d="M24 30c2.7-2.6 5.3-2.6 8 0s5.3 2.6 8 0M26 37c2-2 4-2 6 0s4 2 6 0" stroke="#3fa9ff" stroke-width="3.2" fill="none" stroke-linecap="round"/>
+     <path d="M13 21c3-6 8-9 13-10" stroke="#fff" stroke-width="4" fill="none" stroke-linecap="round"/>`,
   ),
-  shield: svg(
-    `<circle cx="32" cy="32" r="25" fill="#a8ecff" stroke="${INK}" stroke-width="4"/>
-     <circle cx="32" cy="32" r="18" fill="#d6f7ff"/>
-     <path d="M17 27c2-7 8-11 14-12" stroke="#fff" stroke-width="5.5" fill="none" stroke-linecap="round"/>
-     <circle cx="44" cy="43" r="4" fill="#fff"/>`,
+  fakeCrate: svg(
+    `<rect x="8" y="11" width="48" height="44" rx="5" fill="#b8743c" stroke="${INK}" stroke-width="4"/>
+     <rect x="14" y="17" width="36" height="32" rx="2" fill="none" stroke="#7a4a22" stroke-width="2.5"/>
+     <path d="M20 21l24 24M44 21L20 45" stroke="${INK}" stroke-width="7.5" stroke-linecap="round"/>
+     <path d="M20 21l24 24M44 21L20 45" stroke="#fff" stroke-width="4" stroke-linecap="round"/>
+     <path d="M32 20c-7 0-11 4.5-11 10 0 3.5 2 6 4 7v4h14v-4c2-1 4-3.5 4-7 0-5.5-4-10-11-10z" fill="#fff" stroke="${INK}" stroke-width="2.5" stroke-linejoin="round"/>
+     <circle cx="27.5" cy="30" r="2.8" fill="${INK}"/><circle cx="36.5" cy="30" r="2.8" fill="${INK}"/>
+     <path d="M32 34l-1.6 2.6h3.2z" fill="${INK}"/><path d="M28.5 41v-3M32 41v-3M35.5 41v-3" stroke="${INK}" stroke-width="1.6"/>`,
   ),
-  turbo: svg(
-    `<g stroke="${INK}" stroke-width="3.5" stroke-linejoin="round">
-       <path d="M6 14h17l13 18-13 18H6l13-18z" fill="#ff8c2e"/>
-       <path d="M27 14h17l13 18-13 18H27l13-18z" fill="#ffc93c"/></g>`,
+  mortar: svg(
+    `<polygon points="${spikes(39, 16, 5, 11, 8)}" fill="#ffd23f" stroke="${INK}" stroke-width="2.5" stroke-linejoin="round"/>
+     <g transform="rotate(38 52 9)"><rect x="48" y="1" width="8" height="15" rx="4" fill="#ffb41f" stroke="${INK}" stroke-width="2.5"/></g>
+     <path d="M14 46L29 21l12 7-15 25z" fill="#4b5663" stroke="${INK}" stroke-width="3.5" stroke-linejoin="round"/>
+     <path d="M27 20l15 8" stroke="${INK}" stroke-width="7" stroke-linecap="round"/><path d="M27 20l15 8" stroke="#6c7a88" stroke-width="3" stroke-linecap="round"/>
+     <path d="M8 57h40l-6-9H14z" fill="#a0683a" stroke="${INK}" stroke-width="3" stroke-linejoin="round"/>
+     <path d="M5 51c2-3 4-3 6 0M51 53c2-3 4-3 6 0" stroke="#3fa9ff" stroke-width="3" fill="none" stroke-linecap="round"/>`,
+  ),
+  deckGun: svg(
+    `<path d="M15 43c-3 6-1 12 6 15" stroke="${INK}" stroke-width="9" fill="none" stroke-linecap="round"/>
+     <path d="M15 43c-3 6-1 12 6 15" stroke="#ffc93c" stroke-width="5" fill="none" stroke-linecap="round" stroke-dasharray="3 2"/>
+     <polygon points="${spikes(58, 32, 3, 7, 6)}" fill="#ffd23f" stroke="${INK}" stroke-width="2"/>
+     <rect x="26" y="21" width="26" height="6" rx="3" fill="#aab6c2" stroke="${INK}" stroke-width="2.5"/>
+     <rect x="26" y="29" width="28" height="6" rx="3" fill="#c7d0d9" stroke="${INK}" stroke-width="2.5"/>
+     <rect x="26" y="37" width="26" height="6" rx="3" fill="#aab6c2" stroke="${INK}" stroke-width="2.5"/>
+     <rect x="45" y="19" width="5" height="26" rx="2" fill="#3b4450" stroke="${INK}" stroke-width="2.5"/>
+     <rect x="7" y="23" width="21" height="19" rx="4" fill="#5f6b78" stroke="${INK}" stroke-width="3"/>
+     <path d="M11 27h12" stroke="#8a96a3" stroke-width="2.5" stroke-linecap="round"/>`,
+  ),
+  maelstrom: svg(
+    `<circle cx="32" cy="32" r="27" fill="#1d6fa8" stroke="${INK}" stroke-width="4"/>
+     <circle cx="32" cy="32" r="7" fill="${INK}"/>
+     <path d="${spiral(32, 32, 2.6, 3, 23)}" stroke="#d6f6ff" stroke-width="4" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+     <rect x="44" y="12" width="8" height="3.5" rx="1" fill="#a0683a" stroke="${INK}" stroke-width="1.5" transform="rotate(35 48 14)"/>
+     <rect x="9" y="42" width="7" height="3" rx="1" fill="#a0683a" stroke="${INK}" stroke-width="1.5" transform="rotate(-20 12 43)"/>`,
+  ),
+  depthCharges: svg(
+    `<polygon points="${spikes(32, 47, 8, 16, 9)}" fill="#ffb347" stroke="${INK}" stroke-width="3" stroke-linejoin="round"/>
+     <circle cx="32" cy="47" r="7" fill="#fff1a8"/>
+     <g transform="rotate(-18 19 21)" stroke="${INK}" stroke-width="3">
+       <rect x="11" y="7" width="16" height="25" rx="5" fill="#7d8996"/><path d="M11 14h16M11 25h16" stroke="#ffc93c" stroke-width="3.5"/></g>
+     <g transform="rotate(20 45 21)" stroke="${INK}" stroke-width="3">
+       <rect x="37" y="7" width="16" height="25" rx="5" fill="#7d8996"/><path d="M37 14h16M37 25h16" stroke="#ffc93c" stroke-width="3.5"/></g>
+     <circle cx="8" cy="40" r="2.5" fill="#c8f2ff" stroke="${INK}" stroke-width="1.6"/>
+     <circle cx="57" cy="42" r="3" fill="#c8f2ff" stroke="${INK}" stroke-width="1.8"/>`,
+  ),
+  harpoon: svg(
+    `<path d="M12 53c-6-4 3-9-2-14" stroke="#7a5a3a" stroke-width="3.5" fill="none" stroke-linecap="round"/>
+     <path d="M13 52L44 21" stroke="${INK}" stroke-width="8" stroke-linecap="round"/>
+     <path d="M13 52L44 21" stroke="#c8925a" stroke-width="4" stroke-linecap="round"/>
+     <path d="M59 6L39 16l3 3-6 2 8 8 2-6 3 3z" fill="#d7dee6" stroke="${INK}" stroke-width="3" stroke-linejoin="round"/>
+     <circle cx="13" cy="52" r="4.5" fill="#6d4526" stroke="${INK}" stroke-width="3"/>`,
+  ),
+  flail: svg(
+    `<path d="M5 7l7 7" stroke="${INK}" stroke-width="8" stroke-linecap="round"/><path d="M5 7l7 7" stroke="#a0683a" stroke-width="4" stroke-linecap="round"/>
+     <circle cx="17" cy="19" r="3.4" fill="none" stroke="${INK}" stroke-width="2.6"/>
+     <circle cx="22" cy="24" r="3.4" fill="none" stroke="${INK}" stroke-width="2.6"/>
+     <circle cx="27" cy="29" r="3.4" fill="none" stroke="${INK}" stroke-width="2.6"/>
+     <path d="M8 49c6 6 14 9 22 10M5 39c2 6 6 10 11 13" stroke="#bfefff" stroke-width="3.5" fill="none" stroke-linecap="round"/>
+     <polygon points="${spikes(41, 41, 12, 21, 10)}" fill="#6c7a88" stroke="${INK}" stroke-width="3" stroke-linejoin="round"/>
+     <circle cx="41" cy="41" r="13" fill="#4b5663" stroke="${INK}" stroke-width="3"/>
+     <ellipse cx="36" cy="36" rx="4" ry="2.5" fill="#fff" opacity=".45" transform="rotate(-35 36 36)"/>`,
+  ),
+  drone: svg(
+    `<path d="M27 10a7 7 0 0 1 0 9M31 6a13 13 0 0 1 0 17" stroke="#4cd97b" stroke-width="3" fill="none" stroke-linecap="round"/>
+     <path d="M22 30V16" stroke="${INK}" stroke-width="3" stroke-linecap="round"/>
+     <circle cx="22" cy="15" r="3.2" fill="#ff3b3b" stroke="${INK}" stroke-width="2"/>
+     <rect x="15" y="28" width="19" height="11" rx="2" fill="#9aa6b2" stroke="${INK}" stroke-width="3"/>
+     <rect x="18" y="31" width="11" height="4" rx="1" fill="#1d2a38"/>
+     <path d="M44 33h13" stroke="${INK}" stroke-width="4.5" stroke-linecap="round"/>
+     <rect x="36" y="29" width="10" height="8" rx="2" fill="#5f6b78" stroke="${INK}" stroke-width="2.5"/>
+     <path d="M5 40h51l-7 11H13z" fill="#e9eef3" stroke="${INK}" stroke-width="3" stroke-linejoin="round"/>
+     <path d="M10 45h42" stroke="#3fa9ff" stroke-width="3"/>
+     <path d="M3 57c5 0 5-3 10-3s5 3 10 3 5-3 10-3 5 3 10 3 5-3 10-3" stroke="#3fa9ff" stroke-width="3.5" fill="none" stroke-linecap="round"/>`,
   ),
   question: svg(
     `<circle cx="32" cy="32" r="25" fill="#ffd23f" stroke="${INK}" stroke-width="4"/>

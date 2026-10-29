@@ -72,7 +72,7 @@ export class Wake {
         rx: -fz,
         rz: fx,
         age: 0,
-        strength: Math.min(1.2, speed / BOAT.maxSpeed) * (b.turboT > 0 ? 1.4 : 1),
+        strength: Math.min(1.2, speed / BOAT.maxSpeed),
       });
       if (this.samples.length > SAMPLES) this.samples.pop();
       this.lastX = sx;

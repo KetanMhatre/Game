@@ -13,7 +13,7 @@ import { Water } from './Water';
 import { Sfx } from './Audio';
 import {
   BOAT, BOT_COUNT, BOT_NAMES, MAPS, MATCH_SECONDS, PLAYER_COLORS, RESPAWN_SECONDS,
-  SPAWN_PROTECTION_SECONDS, WEAPONS, WEAPON_TUNING, type MapId, type WeaponId,
+  SPAWN_PROTECTION_SECONDS, type MapId, type WeaponId,
 } from './config';
 import { angleDiff, damp } from './util';
 import { waveHeight } from './waves';
@@ -326,6 +326,8 @@ export class Game implements CombatHost {
     const names = [...BOT_NAMES].sort(() => Math.random() - 0.5);
     const colors = PLAYER_COLORS.filter((c) => c !== cfg?.color).sort(() => Math.random() - 0.5);
     const species = SPECIES.map((s) => s.id).filter((s) => s !== cfg?.character).sort(() => Math.random() - 0.5);
+    // Crates only roll weapons enabled on the Arsenal screen (the menu backdrop uses all of them).
+    this.combat.setArsenal(cfg?.arsenal ?? []);
     this.player = null;
     if (cfg) {
       this.player = new Boat(cfg.name || 'You', cfg.color, true, cfg.character);
@@ -515,21 +517,13 @@ export class Game implements CombatHost {
     }
 
     for (const b of this.boats) {
-      if (b.alive && b.input.fire && !frozen) {
-        const before = b.turboT;
-        if (this.combat.useWeapon(b) && b.turboT > before) this.shake(0.15);
-      }
-      const wasAlive = b.alive;
+      if (b.alive && b.input.fire && !frozen) this.combat.useWeapon(b);
       const impact = b.update(dt, this.arena, this.time);
       if (impact > 5) {
         this.particles.splash(b.x + b.forwardX * 1.2, b.y - 0.2, b.z + b.forwardZ * 1.2, Math.min(1.2, impact / 10));
         if (b === this.player) this.shake(0.15);
       }
       if (!b.alive && b.respawnT <= 0) this.respawn(b);
-      if (wasAlive && b.alive && b.turboT > 0 && Math.random() < 0.6) {
-        // Turbo spray off the stern.
-        this.particles.emit(b.x - b.forwardX * 1.3, b.y - 0.15, b.z - b.forwardZ * 1.3, 1, 0xf2fbff, { speed: 2.5, up: 3.5, life: 0.5, size: 0.3, gravity: 14 });
-      }
       this.wakes.get(b.id)?.update(dt, b, this.time, amp);
     }
     this.collideBoats();
@@ -581,16 +575,6 @@ export class Game implements CombatHost {
         b.vx += nx * imp;
         b.vz += nz * imp;
         if (-rel > 2) this.particles.splash((a.x + b.x) / 2, a.y - 0.1, (a.z + b.z) / 2, Math.min(1, -rel / 10));
-        // Turbo ramming.
-        for (const [ram, victim] of [[a, b], [b, a]] as const) {
-          if (ram.turboT > 0 && -rel > 5 && (ram.ramCooldown.get(victim.id) ?? 0) <= 0) {
-            ram.ramCooldown.set(victim.id, 1);
-            victim.vx += (victim === b ? nx : -nx) * WEAPON_TUNING.ramKnockback;
-            victim.vz += (victim === b ? nz : -nz) * WEAPON_TUNING.ramKnockback;
-            this.damage(victim, WEAPON_TUNING.turboRamDamage, ram, WEAPONS.turbo.icon);
-            Sfx.boom(this.listenerDist(victim.x, victim.z));
-          }
-        }
       }
     }
   }
@@ -645,7 +629,7 @@ export class Game implements CombatHost {
       this.camShake = Math.max(0, this.camShake - dt * 2.5);
     }
     cam.lookAt(this.camLook);
-    const fov = (portrait ? 70 : 60) + speedK * 4 + (p.turboT > 0 ? 7 : 0);
+    const fov = (portrait ? 70 : 60) + speedK * 4;
     this.setFov(snap ? fov : cam.fov + (fov - cam.fov) * damp(5, dt));
   }
 

@@ -15,7 +15,12 @@ interface EmitOpts {
   glow?: boolean;
   /** Initial alpha. */
   alpha?: number;
+  /** Optional horizontal direction (unit vector). Default: random in all directions. */
+  dirX?: number;
+  dirZ?: number;
 }
+
+type Resolved = Required<Omit<EmitOpts, 'dirX' | 'dirZ'>>;
 
 const VERT = /* glsl */ `
   attribute float aAlpha;
@@ -101,7 +106,7 @@ class Layer {
     this.points.renderOrder = glow ? 8 : 7;
   }
 
-  spawn(x: number, y: number, z: number, vx: number, vy: number, vz: number, color: THREE.Color, o: Required<EmitOpts>): void {
+  spawn(x: number, y: number, z: number, vx: number, vy: number, vz: number, color: THREE.Color, o: Resolved): void {
     const i = this.next;
     this.next = (this.next + 1) % this.max;
     const k = i * 3;
@@ -183,7 +188,7 @@ export class Particles {
   }
 
   emit(x: number, y: number, z: number, count: number, color: number, opts: EmitOpts = {}): void {
-    const o: Required<EmitOpts> = {
+    const o: Resolved = {
       speed: opts.speed ?? 6,
       up: opts.up ?? 6,
       life: opts.life ?? 0.8,
@@ -197,16 +202,20 @@ export class Particles {
     };
     const layer = o.glow ? this.glow : this.normal;
     _c.set(color);
+    const directed = opts.dirX !== undefined && opts.dirZ !== undefined;
     for (let n = 0; n < count; n++) {
       const a = Math.random() * Math.PI * 2;
       const s = o.speed * (0.35 + Math.random() * 0.65);
+      // Directed emitters keep a little random spread so streams don't look like rails.
+      const dx = directed ? opts.dirX! + (Math.random() - 0.5) * 0.3 : Math.cos(a);
+      const dz = directed ? opts.dirZ! + (Math.random() - 0.5) * 0.3 : Math.sin(a);
       layer.spawn(
         x + (Math.random() - 0.5) * o.spread,
         y + (Math.random() - 0.5) * o.spread * 0.5,
         z + (Math.random() - 0.5) * o.spread,
-        Math.cos(a) * s,
+        dx * s,
         o.up * (0.45 + Math.random() * 0.75),
-        Math.sin(a) * s,
+        dz * s,
         _c,
         o,
       );
