@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { GeoBuilder, UNIT, mat } from './render/GeoBuilder';
 import { lambert, vertexColored } from './render/materials';
 import { planksTexture } from './render/textures';
-import { Character, type SpeciesId } from './Character';
+import { Character, helmStandGeometry, type SpeciesId } from './Character';
 import type { WeaponId } from './config';
 
 // The "nutshell" boat from assets/boat-reference.png: an ellipsoidal half-shell hull with a
@@ -12,6 +12,8 @@ import type { WeaponId } from './config';
 const HX = 0.95, HY = 0.62, HZ = 1.3;
 /** Height of the rim above the water surface: shows off the hull while keeping the inner floor dry. */
 export const RIDE_HEIGHT = 0.47;
+/** Where the sailor sits (on the bench), in boat space. */
+const CHARACTER_POS = new THREE.Vector3(0, -0.2, -0.16);
 const RIM = 0xe3ad6a;
 const RIB = 0xd49a5a;
 const WOOD = 0xb07a45;
@@ -58,6 +60,15 @@ function details(color: number): THREE.BufferGeometry {
   flag.rotateY(Math.PI / 2);
   b.add(flag, color, mat(0.5, 1.42, -0.86));
   b.add(UNIT.sphere, 0xffd23f, mat(0.52, 1.46, -0.86, 0, 0, 0, 0.05));
+  // Helm stand, placed where the sailor sits (see CHARACTER_POS).
+  b.addColored(helmStandGeometry(), mat(CHARACTER_POS.x, CHARACTER_POS.y, CHARACTER_POS.z));
+  // Little outboard motor clamped to the stern: it's what drives the boat now that the sailor steers.
+  b.add(BOX, 0x5f6b78, mat(0, 0.0, -1.25, 0, 0, 0, 0.16, 0.14, 0.1));
+  b.add(UNIT.sphere, 0x3b4450, mat(0, 0.24, -1.4, 0, 0, 0, 0.19, 0.2, 0.17));
+  b.add(UNIT.sphere, color, mat(0, 0.25, -1.4, 0, 0, 0, 0.195, 0.05, 0.175));
+  b.add(UNIT.sphere, 0xe9edf2, mat(0, 0.4, -1.4, 0, 0, 0, 0.1, 0.05, 0.09));
+  b.add(CYL, 0x2c333c, mat(0, -0.2, -1.42, 0.12, 0, 0, 0.045, 0.6, 0.045));
+  b.add(CYL, 0x3b4450, mat(0, -0.15, -1.4, 0, 0, 0, 0.06, 0.12, 0.06));
   g = b.build();
   detailCache.set(color, g);
   return g;
@@ -206,7 +217,7 @@ export class BoatModel {
     this.tilt.add(outer, inner, detail);
 
     this.character = new Character(species, color);
-    this.character.root.position.set(0, -0.2, -0.16);
+    this.character.root.position.copy(CHARACTER_POS);
     this.tilt.add(this.character.root);
 
     this.shieldMat = shieldMaterialBase.clone();

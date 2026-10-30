@@ -1,6 +1,6 @@
 # Nutshell Navy
 
-Browser arena brawler on the water: paddle nutshell boats around a pond, lake or sea, grab floating barrels for weapons, and sink as many rivals as you can in 3 minutes.
+Browser arena brawler on the water: steer motorised nutshell boats around a pond, lake or sea, grab floating crates for weapons, and sink as many rivals as you can in 3 minutes.
 
 Built for **CrazyGames** (HTML5 / WebGL).
 
@@ -36,8 +36,8 @@ Dev-only URL params: `?autoplay=pond|lake|sea` skips the menu, `?time=30` shorte
   - Ripples sparkle, the sky reflects at low angles, and the sea map adds crest foam.
 - **Static scenery** is merged into a few vertex-coloured meshes per map section (`render/GeoBuilder.ts`), so a whole map costs about 75 draw calls.
 - **Sailors** (`Character.ts`): 8 original big-head cartoon characters: Pip the Otter, Chomp the Shark, Snips the Crab, Gus the Walrus, Inka the Octopus, Gale the Seagull, Bubba the Hippo and Hopper the Frog.
-  - **Look:** an oversized head sitting right on the boat, bulging googly eyes, a wide open grin, black rubber-hose arms and white puffy gloves on a kayak paddle.
-  - **Animation:** pupils dart toward the turn, heads bob with each stroke and squash when hit, and they cheer after a sink.
+  - **Look:** an oversized head sitting right on the boat, bulging googly eyes, a wide open grin, black rubber-hose arms and white puffy gloves gripping a ship's wheel that turns as you steer. A small outboard motor at the stern drives the boat.
+  - **Animation:** the wheel turns with the rudder and the arms follow the gloves; pupils dart toward the turn; the wheel jerks when hit; after a sink, the sailor hops and spins the wheel all the way round.
   - **Cost:** about 7 draw calls each. A new character is one entry in `SPECIES`, built with the `HeadKit` helpers.
 - **Effects:** soft sprite particles (`Particles.ts`) for fire, smoke, splashes and debris, plus a foam wake ribbon behind every boat (`Wake.ts`).
 - **Quality** (pause menu, Graphics: Auto/High/Low):
@@ -96,6 +96,22 @@ Weapons come from floating "?" crates. Players can choose which weapons crates m
 | Patrol Drone | Mini gunboat circles you for 10 s, shooting rivals within 26 units | 0.2 per bullet |
 
 Boats have 3 hearts. Fractional damage drains the bar smoothly. Sink = +1 point. Respawn after 3 s with 2 s of spawn protection. The held weapon shows on the boat: a gatling, harpoon launcher, mortar tube, side cannons or torpedo tubes, otherwise a small bow cannon. All numbers are in `WEAPON_TUNING` in `src/game/config.ts`.
+
+## Accounts (Firebase)
+
+Login is **optional**. Guests play instantly with progress saved on the device. Signing in with Google or email and password adds a cloud save at `players/{uid}` in Firestore, holding the captain name, stats (wins, best sinks, matches, total sinks) and preferences (sailor, colour, map, arsenal, graphics). The first time someone signs in, their guest progress is merged into the account.
+
+- **Code:** `src/services/firebase.ts` (lazy loader) and `src/services/Account.ts` (auth and cloud save). `src/ui/AccountPanel.ts` holds the menu button and the "Captain's Log" screen.
+- **Load time:** Firebase (Auth and Firestore Lite) is loaded with dynamic imports *after* the game starts, so it adds nothing to the first load (about 90 KB gzipped, downloaded in the background).
+- **Without `.env` keys** the account button is hidden and the game runs guest-only.
+
+### One-time Firebase setup
+
+1. Copy `.env.example` to `.env` and fill in the web app config (Project settings → Your apps).
+2. **Authentication → Sign-in method:** enable **Email/Password** and **Google**. Google needs a project support email.
+3. **Authentication → Settings → Authorized domains:** `localhost` is there by default. Add every domain the game is served from, such as your CrazyGames preview/game domain and any custom domain. Google sign-in fails with "unauthorized domain" otherwise.
+4. **Firestore Database:** create the database, then publish the rules in `firestore.rules`. Either paste them in the console's Rules tab or run `firebase deploy --only firestore:rules`. The rules let each player read and write only their own save.
+5. Optional: in Google Cloud console → APIs & Services → Credentials, restrict the browser API key to your domains.
 
 ## CrazyGames integration checklist
 

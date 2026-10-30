@@ -10,6 +10,7 @@
     "zip": "npm run build && cd dist && zip -r ../nutshell-navy.zip ."
   },
   "dependencies": {
+    "firebase": "^13.1.0",
     "three": "^0.170.0"
   },
   "devDependencies": {

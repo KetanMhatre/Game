@@ -3,7 +3,7 @@ import { GeoBuilder, UNIT, mat } from './render/GeoBuilder';
 import { lambert, vertexColored } from './render/materials';
 
 // Big-head cartoon sailors: an oversized head sitting right on the boat, bulging googly eyes,
-// wide open grins, black rubber-hose arms and white puffy gloves on the paddle.
+// wide open grins, black rubber-hose arms and white puffy gloves gripping a ship's wheel.
 // Local space: +Z faces forward. The head is built in head-local space (origin = head centre).
 
 export type SpeciesId = 'otter' | 'shark' | 'crab' | 'walrus' | 'octopus' | 'seagull' | 'hippo' | 'frog';
@@ -36,13 +36,18 @@ const CONE = new THREE.ConeGeometry(1, 1, 10);
 const CYL = new THREE.CylinderGeometry(1, 1, 1, 12);
 const BOX = new THREE.BoxGeometry(1, 1, 1);
 const ARM = new THREE.CylinderGeometry(0.045, 0.05, 1, 8);
-const SHAFT = new THREE.CylinderGeometry(0.035, 0.035, 2.3, 8);
 
 // Body layout (character-local).
 const SHOULDER_Y = 0.3;
-const PADDLE_Y = 0.4;
-const PADDLE_Z = 0.62;
-const HAND_X = 0.34;
+/** Ship's wheel: centre, tilt (top leans away from the sailor) and rim radius. */
+const WHEEL_POS = new THREE.Vector3(0, 0.42, 0.68);
+const WHEEL_TILT = 0.5;
+const WHEEL_R = 0.28;
+/** Hands grip the rim at "10 and 2 o'clock" (wheel-local, before the wheel turns). */
+const GRIP_ANGLE = Math.PI / 6;
+const HAND = new THREE.Vector3(Math.cos(GRIP_ANGLE) * WHEEL_R, Math.sin(GRIP_ANGLE) * WHEEL_R, 0);
+const WOOD = 0xa8693a;
+const WOOD_LIGHT = 0xd49a5a;
 
 /** Helpers for placing features on an ellipsoidal head. */
 class HeadKit {
@@ -291,10 +296,58 @@ interface CharGeo {
   head: THREE.BufferGeometry;
   pupils: THREE.BufferGeometry;
   lids: THREE.BufferGeometry;
-  paddle: THREE.BufferGeometry;
+  /** Turning part of the helm (rim, spokes, handles, hub) with the gloves gripping it. */
+  wheel: THREE.BufferGeometry;
   headY: number;
 }
 const geoCache = new Map<string, CharGeo>();
+let standGeo: THREE.BufferGeometry | null = null;
+
+/** Wheel-local: the wheel lies in the XY plane; the sailor sits on the -Z side. */
+function buildWheel(outfit: number): GeoBuilder {
+  const b = new GeoBuilder();
+  b.add(new THREE.TorusGeometry(WHEEL_R, 0.03, 8, 36), WOOD, mat());
+  for (let i = 0; i < 8; i++) {
+    const a = (i / 8) * Math.PI * 2;
+    const dx = Math.cos(a), dy = Math.sin(a);
+    // Rz(a - π/2) points the cylinder's +Y along (cos a, sin a).
+    b.add(CYL, WOOD, mat(dx * WHEEL_R * 0.56, dy * WHEEL_R * 0.56, 0, 0, 0, a - Math.PI / 2, 0.017, WHEEL_R * 0.88, 0.017));
+    b.add(new THREE.CylinderGeometry(0.018, 0.026, 1, 8), WOOD_LIGHT, mat(dx * (WHEEL_R + 0.05), dy * (WHEEL_R + 0.05), 0, 0, 0, a - Math.PI / 2, 1, 0.09, 1));
+    b.add(UNIT.sphere, WOOD_LIGHT, mat(dx * (WHEEL_R + 0.098), dy * (WHEEL_R + 0.098), 0, 0, 0, 0, 0.03));
+  }
+  b.add(CYL, outfit, mat(0, 0, 0, Math.PI / 2, 0, 0, 0.06, 0.07, 0.06));
+  b.add(UNIT.sphere, 0xffc93c, mat(0, 0, -0.04, 0, 0, 0, 0.035));
+  // White puffy gloves wrapped round the rim at 10 and 2 o'clock.
+  for (const sx of [-1, 1]) {
+    const hx = sx * HAND.x, hy = HAND.y;
+    const tx = -Math.sin(GRIP_ANGLE) * sx, ty = Math.cos(GRIP_ANGLE); // rim tangent at the grip
+    b.add(UNIT.sphere, 0xffffff, mat(hx, hy, -0.015, 0, 0, sx * GRIP_ANGLE, 0.1, 0.095, 0.105));
+    for (let f = -1; f <= 1; f++) b.add(UNIT.sphere, 0xf2f2f2, mat(hx + tx * f * 0.045, hy + ty * f * 0.045, 0.05, 0, 0, 0, 0.04));
+    b.add(UNIT.sphere, 0xffffff, mat(hx - sx * 0.05, hy + 0.05, -0.06, 0, 0, -sx * 0.5, 0.04, 0.06, 0.04));
+    b.add(new THREE.TorusGeometry(0.065, 0.028, 6, 14), 0xe9edf2, mat(hx, hy, -0.09));
+  }
+  return b;
+}
+
+/**
+ * Static helm stand (character-local): axle from the hub forward-down into a post down to the boat floor.
+ * BoatModel bakes it into the hull's detail mesh, so it costs no extra draw call.
+ */
+export function helmStandGeometry(): THREE.BufferGeometry {
+  if (standGeo) return standGeo;
+  const b = new GeoBuilder();
+  const n = new THREE.Vector3(0, -Math.sin(WHEEL_TILT), Math.cos(WHEEL_TILT)); // wheel normal, away from the sailor
+  const axleEnd = WHEEL_POS.clone().addScaledVector(n, 0.17);
+  const mid = WHEEL_POS.clone().addScaledVector(n, 0.085);
+  // Rx(π/2 + tilt) lays the cylinder's +Y along the wheel normal (0, -sin, cos).
+  b.add(CYL, 0x3b4450, mat(mid.x, mid.y, mid.z, Math.PI / 2 + WHEEL_TILT, 0, 0, 0.025, 0.17, 0.025));
+  const top = axleEnd.y + 0.04, bottom = -0.24;
+  b.add(CYL, 0x8a5a36, mat(0, (top + bottom) / 2, axleEnd.z, 0, 0, 0, 0.06, top - bottom, 0.06));
+  b.add(BOX, 0x8a5a36, mat(0, top + 0.02, axleEnd.z, 0, 0, 0, 0.16, 0.08, 0.14));
+  b.add(CYL, 0x6d4c35, mat(0, bottom + 0.02, axleEnd.z, 0, 0, 0, 0.14, 0.04, 0.14));
+  standGeo = b.build();
+  return standGeo;
+}
 
 function geometries(sp: SpeciesDef, outfit: number): CharGeo {
   const key = `${sp.id}-${outfit}`;
@@ -317,20 +370,7 @@ function geometries(sp: SpeciesDef, outfit: number): CharGeo {
     lids.add(UNIT.sphere, sp.skin, mat(e.pos.x, e.pos.y, e.pos.z + 0.005, 0, 0, 0, sx * 1.08, sy * 1.08, sz * 1.12));
   }
 
-  // Paddle with white puffy gloves on the shaft.
-  const paddle = new GeoBuilder();
-  paddle.add(SHAFT, 0xc8925a, mat(0, 0, 0, 0, 0, Math.PI / 2));
-  for (const sx of [-1, 1]) {
-    paddle.add(UNIT.sphere, outfit, mat(sx * 1.17, 0, 0, 0, 0, 0, 0.25, 0.135, 0.032));
-    paddle.add(UNIT.sphere, 0xffffff, mat(sx * 1.0, 0, 0, 0, 0, 0, 0.06, 0.07, 0.036));
-    const hx = sx * HAND_X;
-    paddle.add(UNIT.sphere, 0xffffff, mat(hx, 0.01, 0.005, 0, 0, 0, 0.115, 0.105, 0.115));
-    for (let f = 0; f < 3; f++) paddle.add(UNIT.sphere, 0xf2f2f2, mat(hx - sx * 0.05 + sx * f * 0.05, 0.075, 0.06, 0, 0, 0, 0.042));
-    paddle.add(UNIT.sphere, 0xffffff, mat(hx - sx * 0.09, 0.06, -0.03, 0, 0, sx * 0.6, 0.045, 0.065, 0.045));
-    paddle.add(new THREE.TorusGeometry(0.07, 0.03, 6, 14), 0xe9edf2, mat(hx, -0.01, -0.1));
-  }
-
-  g = { head: head.build(), pupils: pupils.build(), lids: lids.build(), paddle: paddle.build(), headY: 0.32 + HEAD_R * sp.scale[1] * 0.92 };
+  g = { head: head.build(), pupils: pupils.build(), lids: lids.build(), wheel: buildWheel(outfit).build(), headY: 0.32 + HEAD_R * sp.scale[1] * 0.92 };
   geoCache.set(key, g);
   return g;
 }
@@ -339,21 +379,26 @@ const _v = new THREE.Vector3();
 const _s = new THREE.Vector3();
 const _up = new THREE.Vector3(0, 1, 0);
 
-/** A big-headed cartoon sailor sitting in the boat, paddling with a kayak paddle. Local +Z = forward. */
+/** A big-headed cartoon sailor at the helm, steering with a ship's wheel. Local +Z = forward. */
 export class Character {
   readonly root = new THREE.Group();
   private body = new THREE.Group();
   private head = new THREE.Group();
   private pupils: THREE.Mesh;
   private lids: THREE.Mesh;
-  private paddle: THREE.Mesh;
+  /** Tilted mount (fixed) and the turning wheel inside it. */
+  private helm = new THREE.Group();
+  private wheel: THREE.Mesh;
+  private wheelAngle = 0;
+  /** Extra spin layered on top of steering (hit jolts, victory spins). */
+  private spin = 0;
   private arms: THREE.Mesh[] = [];
   private headY: number;
-  private phase = Math.random() * 6;
   private blinkT = 1 + Math.random() * 3;
   private glanceT = 0;
   private glance = 0;
   private hitT = 0;
+  private hitDir = 1;
   private cheerT = 0;
   private time = 0;
 
@@ -377,15 +422,17 @@ export class Character {
     this.head.add(this.pupils, this.lids);
     this.head.position.y = this.headY;
 
-    this.paddle = new THREE.Mesh(g.paddle, vertexColored);
-    this.paddle.position.set(0, PADDLE_Y, PADDLE_Z);
+    this.wheel = new THREE.Mesh(g.wheel, vertexColored);
+    this.helm.position.copy(WHEEL_POS);
+    this.helm.rotation.x = WHEEL_TILT;
+    this.helm.add(this.wheel);
     const sleeve = lambert(SLEEVE);
     for (let i = 0; i < 2; i++) {
       const arm = new THREE.Mesh(ARM, sleeve);
       this.arms.push(arm);
       this.body.add(arm);
     }
-    this.body.add(torso, collar, this.head, this.paddle);
+    this.body.add(torso, collar, this.head, this.helm);
     this.root.add(this.body);
     this.root.traverse((o) => {
       if (o instanceof THREE.Mesh) o.castShadow = o.receiveShadow = true;
@@ -395,53 +442,52 @@ export class Character {
 
   hit(): void {
     this.hitT = 0.7;
+    this.hitDir = Math.random() < 0.5 ? -1 : 1;
   }
 
   cheer(): void {
     this.cheerT = 1.1;
   }
 
-  /** effort: paddling input 0..1, steer: -1..1 (+ = right), speed in u/s. */
+  /** effort: throttle 0..1, steer: -1..1 (+ = right), speed in u/s. */
   update(dt: number, effort: number, steer: number, speed: number): void {
     this.time += dt;
     const t = this.time;
-    this.phase += dt * (1.6 + effort * 6.8) * (speed < -0.5 ? -1 : 1);
-
-    // Paddle: one blade dips while the other lifts, with a sweeping stroke.
-    const dip = Math.sin(this.phase);
-    const amt = 0.22 + effort * 0.55;
-    let py = PADDLE_Y + Math.abs(dip) * 0.03, pz = PADDLE_Z;
-    let rz = dip * amt;
-    let ry = Math.cos(this.phase) * 0.35 * (0.3 + effort);
-    this.body.position.y = Math.sin(t * 2.2) * 0.012;
+    // Engine rumble: a faint shudder that grows with throttle.
+    this.body.position.y = Math.sin(t * 2.2) * 0.012 + Math.sin(t * 47) * 0.004 * effort;
     this.body.rotation.set(0, 0, 0);
     this.body.scale.setScalar(1);
-    // Big heads bob a little with each stroke.
-    let headBob = Math.abs(dip) * 0.025 * effort;
+    let headBob = Math.sin(t * 9) * 0.008 * effort + Math.min(1, Math.abs(speed) / 12) * 0.01;
     let headSquash = 1;
 
     if (this.cheerT > 0) {
-      // Hop and raise the paddle overhead.
+      // Hop and spin the wheel all the way round.
       this.cheerT = Math.max(0, this.cheerT - dt);
       const k = Math.sin((1 - this.cheerT / 1.1) * Math.PI);
-      this.body.position.y += Math.abs(Math.sin(this.cheerT * 9)) * 0.18 * k;
-      py += 0.75 * k;
-      pz -= 0.3 * k;
-      rz = Math.sin(t * 14) * 0.15 * k + rz * (1 - k);
-      ry *= 1 - k;
+      this.body.position.y += Math.abs(Math.sin(this.cheerT * 9)) * 0.16 * k;
+      this.spin += dt * 12 * k;
       headSquash = 1 + Math.sin(this.cheerT * 18) * 0.05 * k;
+    } else {
+      // Unwind any leftover spin to the nearest full turn.
+      const full = Math.round(this.spin / (Math.PI * 2)) * Math.PI * 2;
+      this.spin += (full - this.spin) * Math.min(1, dt * 6);
     }
+    let jolt = 0;
     if (this.hitT > 0) {
-      // Squash and wobble.
+      // Squash, wobble, and the wheel jerks out of the sailor's hands for a moment.
       this.hitT = Math.max(0, this.hitT - dt);
       const k = this.hitT / 0.7;
       this.body.rotation.z = Math.sin(this.hitT * 30) * 0.2 * k;
       headSquash = 1 - 0.18 * k;
       headBob -= 0.05 * k;
+      jolt = Math.sin(this.hitT * 22) * 0.9 * k * this.hitDir;
     }
 
-    this.paddle.position.set(0, py, pz);
-    this.paddle.rotation.set(0, ry, rz);
+    // Steering: the wheel turns with the rudder (+ = clockwise from the sailor's seat), plus tiny corrections.
+    const target = steer * 1.35 + Math.sin(t * 1.3) * 0.05;
+    this.wheelAngle += (target - this.wheelAngle) * Math.min(1, dt * 10);
+    this.wheel.rotation.z = this.wheelAngle + this.spin + jolt;
+
     this.head.position.y = this.headY + headBob;
     this.head.scale.set(2 - headSquash, headSquash, 2 - headSquash);
     this.head.rotation.set(Math.sin(t * 1.7) * 0.04, -steer * 0.3, -steer * 0.07 + (this.hitT > 0 ? Math.sin(this.hitT * 40) * 0.25 : 0));
@@ -457,17 +503,18 @@ export class Character {
     this.pupils.position.x += (look - this.pupils.position.x) * Math.min(1, dt * 12);
     this.pupils.position.y = this.hitT > 0 ? Math.sin(this.hitT * 50) * 0.015 : 0;
 
-    // Rubber-hose arms reach from the shoulders to the gloves on the shaft.
-    this.paddle.updateMatrix();
+    // Rubber-hose arms reach from the shoulders to the gloves, which turn with the wheel.
+    this.wheel.updateMatrix();
+    this.helm.updateMatrix();
     for (let i = 0; i < 2; i++) {
       const sx = i === 0 ? -1 : 1;
-      const hand = _v.set(sx * HAND_X, -0.01, -0.1).applyMatrix4(this.paddle.matrix);
-      const dir = _s.set(sx * 0.22, SHOULDER_Y, 0.06);
+      const hand = _v.set(sx * HAND.x, HAND.y, -0.09).applyMatrix4(this.wheel.matrix).applyMatrix4(this.helm.matrix);
+      const shoulder = _s.set(sx * 0.22, SHOULDER_Y, 0.06);
       const arm = this.arms[i];
-      arm.position.copy(dir).add(hand).multiplyScalar(0.5);
-      dir.subVectors(hand, dir);
-      const len = dir.length();
-      arm.quaternion.setFromUnitVectors(_up, dir.divideScalar(len || 1));
+      arm.position.copy(shoulder).add(hand).multiplyScalar(0.5);
+      shoulder.subVectors(hand, shoulder);
+      const len = shoulder.length();
+      arm.quaternion.setFromUnitVectors(_up, shoulder.divideScalar(len || 1));
       arm.scale.set(1, len, 1);
     }
 
@@ -480,3 +527,4 @@ export class Character {
     if (this.hitT > 0.35) this.lids.visible = true;
   }
 }
+

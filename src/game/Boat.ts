@@ -224,7 +224,7 @@ export class Boat {
     vL *= Math.exp(-BOAT.lateralGrip * dt);
     if (thr > 0.02 && vF > 0) vF += (before - Math.hypot(vF, vL)) * BOAT.cornerCarry * thr;
 
-    // Yaw with inertia. Turning authority depends on speed: paddles can pivot a stopped boat
+    // Yaw with inertia. Turning authority depends on speed: the motor can pivot a stopped boat
     // slowly, it's sharpest at cruising speed and widens a bit above top speed.
     const s = Math.abs(vF) / BOAT.maxSpeed;
     const authority = 0.35 + 0.65 * Math.min(1, s / 0.45) - Math.max(0, s - 0.8) * 0.5;

@@ -19,6 +19,7 @@ import { angleDiff, damp } from './util';
 import { waveHeight } from './waves';
 import type { PlayConfig, ScoreRow, UI } from '../ui/UI';
 import { CrazyGames } from '../sdk/crazygames';
+import { Account, cleanStats, type Stats } from '../services/Account';
 
 type State = 'menu' | 'countdown' | 'playing' | 'paused' | 'ended';
 export type QualitySetting = 'auto' | 'high' | 'low';
@@ -167,7 +168,9 @@ export class Game implements CombatHost {
     Sfx.unlock();
     Sfx.click();
     this.lastCfg = cfg;
-    CrazyGames.setItem('nn_prefs', JSON.stringify({ ...cfg, quality: this.quality }));
+    const prefs = { ...cfg, quality: this.quality };
+    CrazyGames.setItem('nn_prefs', JSON.stringify(prefs));
+    Account.save({ name: cfg.name, prefs });
     this.clearShowcase();
     this.loadMap(cfg.map);
     this.populate(cfg);
@@ -200,7 +203,10 @@ export class Game implements CombatHost {
       p.model.character.cheer();
     }
     stats.bestKills = Math.max(stats.bestKills, p.kills);
+    stats.matches++;
+    stats.sinks += p.kills;
     CrazyGames.setItem('nn_stats', JSON.stringify(stats));
+    Account.save({ stats });
     this.ui.setStats(stats);
     this.ui.showEnd(rows, rank);
   }
@@ -232,12 +238,15 @@ export class Game implements CombatHost {
 
   // ---------------------------------------------------------------- quality
 
-  setQuality(q: QualitySetting): void {
+  /** Applies a graphics setting. `persist` saves it (false when it comes from a cloud save being applied). */
+  setQuality(q: QualitySetting, persist = true): void {
     this.quality = q;
     this.applyLevel(startLevel(q));
+    if (!persist) return;
     try {
-      const prefs = JSON.parse(CrazyGames.getItem('nn_prefs') || '{}');
-      CrazyGames.setItem('nn_prefs', JSON.stringify({ ...prefs, quality: q }));
+      const prefs = { ...JSON.parse(CrazyGames.getItem('nn_prefs') || '{}'), quality: q };
+      CrazyGames.setItem('nn_prefs', JSON.stringify(prefs));
+      Account.save({ prefs });
     } catch {
       /* ignore */
     }
@@ -525,6 +534,13 @@ export class Game implements CombatHost {
       }
       if (!b.alive && b.respawnT <= 0) this.respawn(b);
       this.wakes.get(b.id)?.update(dt, b, this.time, amp);
+      // Propeller churn behind the outboard motor while the throttle is open.
+      if (b.alive && Math.abs(b.input.throttle) > 0.1 && Math.random() < 0.35) {
+        this.particles.emit(b.x - b.forwardX * 1.55, b.y - 0.45, b.z - b.forwardZ * 1.55, 1, 0xf2fbff, {
+          dirX: -b.forwardX * Math.sign(b.input.throttle), dirZ: -b.forwardZ * Math.sign(b.input.throttle),
+          speed: 2.5, up: 1.4, life: 0.4, size: 0.28, gravity: 6, alpha: 0.85,
+        });
+      }
     }
     this.collideBoats();
     this.combat.update(dt);
@@ -663,11 +679,10 @@ export class Game implements CombatHost {
   }
 }
 
-export function loadStats(): { wins: number; bestKills: number } {
+export function loadStats(): Stats {
   try {
-    const s = JSON.parse(CrazyGames.getItem('nn_stats') || '{}');
-    return { wins: Number(s.wins) || 0, bestKills: Number(s.bestKills) || 0 };
+    return cleanStats(JSON.parse(CrazyGames.getItem('nn_stats') || '{}'));
   } catch {
-    return { wins: 0, bestKills: 0 };
+    return cleanStats({});
   }
 }

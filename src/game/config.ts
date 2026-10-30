@@ -174,7 +174,7 @@ export const MAPS: Record<MapId, MapDef> = {
   },
 };
 
-/** Boat trim, flag, paddle blades and sailor shirt stripes. */
+/** Boat trim, flag, motor band, wheel hub and sailor shirt. */
 export const PLAYER_COLORS = [0xff4d5e, 0x3fa9ff, 0xffc93c, 0x4cd97b, 0xb765ff, 0xff8c2e, 0xff6fb5, 0x2ad4c9];
 
 export const BOT_NAMES = [

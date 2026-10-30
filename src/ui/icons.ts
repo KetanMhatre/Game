@@ -141,6 +141,20 @@ const ICONS: Record<string, string> = {
      <path d="M10 45h42" stroke="#3fa9ff" stroke-width="3"/>
      <path d="M3 57c5 0 5-3 10-3s5 3 10 3 5-3 10-3 5 3 10 3 5-3 10-3" stroke="#3fa9ff" stroke-width="3.5" fill="none" stroke-linecap="round"/>`,
   ),
+  user: svg(
+    `<circle cx="32" cy="23" r="11" fill="#fff" stroke="${INK}" stroke-width="4"/>
+     <path d="M11 56c0-12 9-19 21-19s21 7 21 19z" fill="#fff" stroke="${INK}" stroke-width="4" stroke-linejoin="round"/>`,
+  ),
+  google: svg(
+    `<path d="M57.6 32.6c0-1.9-.2-3.7-.5-5.4H32v10.3h14.4c-.6 3.3-2.5 6.1-5.4 8v6.6h8.7c5.1-4.7 7.9-11.6 7.9-19.5z" fill="#4285F4"/>
+     <path d="M32 59c7.3 0 13.4-2.4 17.8-6.5l-8.7-6.7c-2.4 1.6-5.5 2.6-9.1 2.6-7 0-12.9-4.7-15.1-11.1H7.9v6.9C12.3 52.9 21.5 59 32 59z" fill="#34A853"/>
+     <path d="M16.9 37.3c-.6-1.6-.9-3.4-.9-5.3s.3-3.7.9-5.3v-6.9H7.9C6 23.6 5 27.7 5 32s1 8.4 2.9 12.2z" fill="#FBBC05"/>
+     <path d="M32 15.6c4 0 7.5 1.4 10.3 4l7.7-7.7C45.4 7.6 39.3 5 32 5 21.5 5 12.3 11.1 7.9 19.8l9 6.9c2.2-6.4 8.1-11.1 15.1-11.1z" fill="#EA4335"/>`,
+  ),
+  cloud: svg(
+    `<path d="M18 48h30a11 11 0 0 0 1-22 15 15 0 0 0-29-2 12 12 0 0 0-2 24z" fill="#fff" stroke="${INK}" stroke-width="4" stroke-linejoin="round"/>`,
+  ),
+  close: svg(`<path d="M18 18l28 28M46 18L18 46" stroke="${INK}" stroke-width="7" stroke-linecap="round"/>`),
   question: svg(
     `<circle cx="32" cy="32" r="25" fill="#ffd23f" stroke="${INK}" stroke-width="4"/>
      <path d="M24 25c0-5 4-8 8.5-8s8.5 3 8.5 7.5c0 6-8 6.5-8 12.5" stroke="${INK}" stroke-width="5.5" fill="none" stroke-linecap="round"/>

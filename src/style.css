@@ -246,6 +246,128 @@ svg { display: block; width: 100%; height: 100%; }
 
 .btn-play.btn { font-size: 30px; padding: 13px; margin-top: 18px; }
 
+/* ---------------------------------------------------------------- account */
+
+.menu-corner { display: flex; gap: 8px; align-items: center; }
+.account-chip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 48px;
+  max-width: 220px;
+  padding: 0 14px 0 5px;
+  border-radius: 24px;
+  border: 3px solid var(--ink);
+  background: linear-gradient(180deg, #ffffff 0%, #bfeeff 100%);
+  box-shadow: inset 0 -3px 0 rgba(11, 42, 69, 0.15), 0 4px 0 var(--ink);
+  font-family: var(--display);
+  font-size: 17px;
+  color: var(--ink);
+  cursor: pointer;
+}
+.account-chip:active { transform: translateY(3px); box-shadow: 0 1px 0 var(--ink); }
+.account-chip:disabled { opacity: 0.7; cursor: default; }
+.ac-av {
+  flex: 0 0 auto;
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  padding: 4px;
+  border-radius: 50%;
+  border: 2.5px solid var(--ink);
+  background: var(--sea-2);
+}
+.ac-av:has(img), .ac-av:has(b) { padding: 0; }
+.ac-av img { width: 100%; height: 100%; object-fit: cover; }
+.ac-av b, .acc-avatar b { font-family: var(--display); font-weight: 400; color: #fff; text-shadow: var(--outline); }
+.ac-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.account-card { position: relative; width: min(400px, 100%); max-height: calc(100% - 12px); overflow-y: auto; scrollbar-width: none; text-align: center; }
+.x-btn {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  width: 38px;
+  height: 38px;
+  padding: 9px;
+  border-radius: 50%;
+  border: 3px solid var(--ink);
+  background: #fff;
+  box-shadow: 0 3px 0 var(--ink);
+  cursor: pointer;
+}
+.acc-hero, .acc-avatar {
+  width: 72px;
+  height: 72px;
+  margin: 0 auto 6px;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  padding: 14px;
+  border-radius: 50%;
+  border: 4px solid var(--ink);
+  background: linear-gradient(180deg, var(--sea-1), var(--sea-2));
+  box-shadow: 0 4px 0 var(--ink);
+}
+.acc-avatar:has(img), .acc-avatar:has(b) { padding: 0; }
+.acc-avatar img { width: 100%; height: 100%; object-fit: cover; }
+.acc-avatar b { font-size: 36px; }
+.acc-sub { margin: 2px 0 12px; font-size: 14px; }
+.btn-google {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  margin-top: 4px;
+  font-family: var(--body);
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: 0;
+  color: #1f1f1f;
+  text-shadow: none;
+  background: #fff;
+  box-shadow: 0 5px 0 var(--ink);
+}
+.btn-google svg { width: 24px; height: 24px; }
+.acc-or { display: flex; align-items: center; gap: 10px; margin: 14px 0 10px; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: var(--ink-2); opacity: 0.6; }
+.acc-or::before, .acc-or::after { content: ''; flex: 1; height: 2px; border-radius: 1px; background: rgba(11, 42, 69, 0.2); }
+.acc-form { display: flex; flex-direction: column; gap: 8px; }
+.acc-input {
+  width: 100%;
+  font-family: var(--body);
+  font-size: 16px;
+  font-weight: 600;
+  padding: 10px 14px;
+  border-radius: 14px;
+  border: 3px solid var(--ink);
+  background: #fff;
+  color: var(--ink);
+  outline: none;
+  user-select: text;
+  -webkit-user-select: text;
+}
+.acc-input:focus { border-color: var(--sea-2); box-shadow: 0 0 0 3px rgba(47, 180, 224, 0.35); }
+.acc-form .btn { margin-top: 4px; font-size: 22px; }
+.acc-note { margin: 0; font-size: 12px; color: var(--ink-2); }
+.acc-msg { min-height: 0; margin-top: 8px; font-size: 13px; font-weight: 600; }
+.acc-msg.error { padding: 8px 10px; border-radius: 10px; color: #b3173b; background: rgba(255, 77, 109, 0.12); }
+.acc-msg.info { padding: 8px 10px; border-radius: 10px; color: #16683b; background: rgba(76, 217, 123, 0.15); }
+.acc-links { display: flex; justify-content: space-between; gap: 8px; margin-top: 10px; }
+.link { padding: 2px; border: none; background: none; font-family: var(--body); font-size: 13px; font-weight: 700; color: var(--sea-3); cursor: pointer; text-decoration: underline; text-underline-offset: 3px; }
+.link:hover { color: var(--ink); }
+.acc-guest { display: block; margin: 12px auto 0; color: var(--ink-2); opacity: 0.75; }
+.acc-cloud { display: inline-flex; align-items: center; gap: 6px; margin-bottom: 12px; padding: 4px 12px 4px 6px; border-radius: 14px; font-size: 13px; font-weight: 700; background: rgba(11, 42, 69, 0.07); }
+.acc-cloud svg { width: 22px; height: 22px; }
+.acc-cloud.ok { color: #16683b; background: rgba(76, 217, 123, 0.15); }
+.acc-cloud.err { color: #b3173b; background: rgba(255, 77, 109, 0.12); }
+.acc-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-bottom: 4px; }
+.acc-stats div { display: flex; flex-direction: column; padding: 8px 2px; border-radius: 12px; border: 2.5px solid rgba(11, 42, 69, 0.15); background: #fff; }
+.acc-stats b { font-family: var(--display); font-weight: 400; font-size: 24px; color: var(--ink); }
+.acc-stats span { font-size: 11px; font-weight: 700; color: var(--ink-2); opacity: 0.75; }
+.account-card .btn-play.acc-done { font-size: 22px; }
+
 /* ---------------------------------------------------------------- arsenal */
 
 .arsenal-btn { display: flex; align-items: center; gap: 10px; font-size: 19px; margin-top: 14px; padding: 8px 14px 8px 10px; }
@@ -558,6 +680,7 @@ svg { display: block; width: 100%; height: 100%; }
 
 /* Short landscape phones: two-column menu so PLAY is always visible. */
 @media (max-height: 540px) {
+  .menu { padding-top: 60px; padding-bottom: 8px; }
   .menu-card { width: min(740px, 100%); display: grid; grid-template-columns: 1fr 1fr; gap: 18px; padding: 12px 16px; }
   .menu-card .logo .l1 { font-size: 30px; }
   .menu-card .logo .l2 { font-size: 36px; }
@@ -572,6 +695,13 @@ svg { display: block; width: 100%; height: 100%; }
   .menu-card .help { display: none; }
   .hud-tc { top: 8px; }
   .menu-card .arsenal-btn { margin-top: 8px; padding: 6px 12px 6px 8px; font-size: 16px; }
+  .account-chip { height: 42px; font-size: 15px; max-width: 160px; }
+  .ac-av { width: 30px; height: 30px; }
+  .account-card { padding: 12px 16px; }
+  .acc-hero, .acc-avatar { width: 52px; height: 52px; padding: 10px; }
+  .acc-sub { margin-bottom: 8px; font-size: 12px; }
+  .acc-or { margin: 8px 0 6px; }
+  .acc-input { padding: 7px 12px; font-size: 15px; }
   .menu-card .ab-ics i { width: 26px; height: 26px; }
   .arsenal-card { width: min(760px, 100%); padding: 10px 16px 12px; }
   .ars-grid { grid-template-columns: repeat(6, 1fr); gap: 10px 6px; margin: 8px 0 6px; }

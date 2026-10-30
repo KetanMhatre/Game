@@ -2,6 +2,8 @@ import { CrazyGames } from './sdk/crazygames';
 import { Game, loadStats, type QualitySetting } from './game/Game';
 import { UI, type PlayConfig } from './ui/UI';
 import { Sfx } from './game/Audio';
+import { Account } from './services/Account';
+import { AccountPanel } from './ui/AccountPanel';
 
 /** Wait (briefly) for the bundled fonts so canvas-drawn labels and badges use them. */
 async function loadFonts(): Promise<void> {
@@ -48,9 +50,30 @@ async function boot() {
     setTimeout(() => boot.remove(), 800);
   }
 
+  // Optional accounts: the game is already playable; Firebase loads in the background.
+  const currentPrefs = (): Record<string, unknown> => {
+    try {
+      return JSON.parse(CrazyGames.getItem('nn_prefs') || '{}');
+    } catch {
+      return {};
+    }
+  };
+  Account.getLocal = () => ({ name: ui.config.name, stats: loadStats(), prefs: { ...currentPrefs(), ...ui.config } });
+  Account.onProgress = (p) => {
+    // A cloud save was merged with this device's progress: store it locally and show it.
+    CrazyGames.setItem('nn_stats', JSON.stringify(p.stats));
+    CrazyGames.setItem('nn_prefs', JSON.stringify({ ...p.prefs, name: p.name }));
+    ui.setStats(p.stats);
+    ui.applyConfig({ ...p.prefs, name: p.name });
+    const q = p.prefs.quality;
+    if (q === 'auto' || q === 'high' || q === 'low') game.setQuality(q, false);
+  };
+  new AccountPanel(document.getElementById('ui')!, ui.menuCorner, () => ui.config.name, loadStats);
+  void Account.start();
+
   // Dev shortcut: ?autoplay=pond|lake|sea jumps straight into a match.
   if (import.meta.env.DEV) {
-    (window as unknown as { __game: Game }).__game = game; // for automated tests
+    Object.assign(window, { __game: game, __account: Account }); // for automated tests
     const map = new URLSearchParams(location.search).get('autoplay');
     if (map) ui.onPlay({ ...ui.config, map: map as PlayConfig['map'] });
   }

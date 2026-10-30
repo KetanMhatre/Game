@@ -122,6 +122,26 @@ export class UI {
     if (input) input.value = name;
   }
 
+  /** Top-right corner of the menu (hosts the account and sound buttons). */
+  get menuCorner(): HTMLElement {
+    return this.menu.querySelector<HTMLElement>('.menu-corner')!;
+  }
+
+  /** Applies settings loaded from elsewhere (e.g. a cloud save) and refreshes the menu + 3D preview. */
+  applyConfig(p: Record<string, unknown>): void {
+    if (typeof p.name === 'string' && p.name.trim()) this.setName(p.name.trim().slice(0, 14));
+    if (PLAYER_COLORS.includes(p.color as number)) this.cfg.color = p.color as number;
+    if (typeof p.map === 'string' && p.map in MAPS) this.cfg.map = p.map as MapId;
+    if (SPECIES.some((s) => s.id === p.character)) this.cfg.character = p.character as SpeciesId;
+    if (Array.isArray(p.arsenal)) this.cfg.arsenal = validArsenal(p.arsenal);
+    this.menu.querySelectorAll<HTMLElement>('.swatch').forEach((s) => s.classList.toggle('sel', Number(s.dataset.color) === this.cfg.color));
+    this.menu.querySelectorAll<HTMLElement>('.map-card').forEach((s) => s.classList.toggle('sel', s.dataset.map === this.cfg.map));
+    this.renderPicker();
+    this.renderArsenalCount();
+    this.onMapSelect(this.cfg.map);
+    this.onPreview({ ...this.cfg });
+  }
+
   setMuted(muted: boolean): void {
     this.root.querySelectorAll('.mute-btn').forEach((b) => (b.innerHTML = icon(muted ? 'soundOff' : 'soundOn')));
   }
@@ -156,7 +176,7 @@ export class UI {
       <div class="menu-card card">
         <div class="col">
           <h1 class="logo"><span class="l1">Nutshell</span><span class="l2">Navy</span></h1>
-          <p class="tag">Paddle. Pick up. Sink 'em all!</p>
+          <p class="tag">Steer. Pick up. Sink 'em all!</p>
           <label class="lbl">Captain name</label>
           <input class="name-input" maxlength="14" value="${esc(this.cfg.name)}" spellcheck="false" />
           <label class="lbl">Sailor</label>
@@ -175,7 +195,7 @@ export class UI {
             <span class="ab-label">Arsenal</span><b class="ab-count"></b></button>
           <button class="btn btn-play">PLAY</button>
           <div class="stats">${this.statsHtml()}</div>
-          <div class="help">WASD / Arrows to paddle · Space or Click to fire · Esc to pause</div>
+          <div class="help">WASD / Arrows to steer · Space or Click to fire · Esc to pause</div>
         </div>
       </div>
       <div class="menu-corner">${this.muteButton()}</div>`;
