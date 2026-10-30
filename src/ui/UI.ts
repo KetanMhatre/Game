@@ -84,7 +84,7 @@ export class UI {
       name: saved.name || 'Captain ' + Math.floor(100 + Math.random() * 900),
       color: PLAYER_COLORS.includes(saved.color as number) ? (saved.color as number) : PLAYER_COLORS[0],
       map: saved.map && MAPS[saved.map] ? saved.map : 'pond',
-      character: SPECIES.some((s) => s.id === saved.character) ? (saved.character as SpeciesId) : 'frog',
+      character: SPECIES.some((s) => s.id === saved.character) ? (saved.character as SpeciesId) : SPECIES[0].id,
       arsenal: validArsenal(saved.arsenal),
     };
     this.vignette = this.el('div', 'vignette');
@@ -300,7 +300,8 @@ export class UI {
   private renderPicker(): void {
     const i = SPECIES.findIndex((s) => s.id === this.cfg.character);
     const dots = SPECIES.map((_, k) => `<i class="${k === i ? 'on' : ''}"></i>`).join('');
-    this.menu.querySelector('.pick-name')!.innerHTML = `<span>${SPECIES[i].name}</span><span class="dots">${dots}</span>`;
+    const sp = SPECIES[i];
+    this.menu.querySelector('.pick-name')!.innerHTML = `<span>${sp.name} <small>the ${sp.kind}</small></span><span class="dots">${dots}</span>`;
   }
 
   // ---------------------------------------------------------------- HUD

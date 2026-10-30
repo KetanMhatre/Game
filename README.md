@@ -35,7 +35,10 @@ Dev-only URL params: `?autoplay=pond|lake|sea` skips the menu, `?time=30` shorte
   - Foam lines animate at every shore, island, rock and dock post.
   - Ripples sparkle, the sky reflects at low angles, and the sea map adds crest foam.
 - **Static scenery** is merged into a few vertex-coloured meshes per map section (`render/GeoBuilder.ts`), so a whole map costs about 75 draw calls.
-- **Sailors** (`Character.ts`): 8 animal species, each about 6 draw calls. They paddle with a kayak paddle, lean into turns, blink, wobble when hit and cheer after a sink.
+- **Sailors** (`Character.ts`): 8 original big-head cartoon characters: Pip the Otter, Chomp the Shark, Snips the Crab, Gus the Walrus, Inka the Octopus, Gale the Seagull, Bubba the Hippo and Hopper the Frog.
+  - **Look:** an oversized head sitting right on the boat, bulging googly eyes, a wide open grin, black rubber-hose arms and white puffy gloves on a kayak paddle.
+  - **Animation:** pupils dart toward the turn, heads bob with each stroke and squash when hit, and they cheer after a sink.
+  - **Cost:** about 7 draw calls each. A new character is one entry in `SPECIES`, built with the `HeadKit` helpers.
 - **Effects:** soft sprite particles (`Particles.ts`) for fire, smoke, splashes and debris, plus a foam wake ribbon behind every boat (`Wake.ts`).
 - **Quality** (pause menu, Graphics: Auto/High/Low):
   - Auto starts high on desktop and one step lower on phones.
@@ -53,7 +56,7 @@ src/
     Game.ts            state machine, loop, camera, lights/shadows, quality, menu showcase, scoring
     Boat.ts            boat entity: input → physics, wave riding, HP, name tag
     BoatModel.ts       nutshell boat (matches assets/boat-reference.png) + bubble shield
-    Character.ts       animal sailors (8 species) and their animation
+    Character.ts       big-head cartoon sailors (8 characters) and their animation
     Arena.ts           shoreline, terrain, islands, props, decor batching, collisions, land-distance field
     Water.ts           stylised water shader (foam, depth colour, sparkle)
     Sky.ts             gradient sky dome + clouds

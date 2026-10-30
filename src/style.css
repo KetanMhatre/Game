@@ -196,6 +196,7 @@ svg { display: block; width: 100%; height: 100%; }
   color: #fff;
   text-shadow: var(--outline);
 }
+.pick-name small { font-size: 0.68em; opacity: 0.9; }
 .dots { display: flex; gap: 4px; margin-top: 2px; }
 .dots i { width: 6px; height: 6px; border-radius: 50%; background: rgba(255, 255, 255, 0.4); }
 .dots i.on { background: var(--gold-1); box-shadow: 0 0 0 1.5px var(--ink); }
