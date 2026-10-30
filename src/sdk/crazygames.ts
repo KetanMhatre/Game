@@ -15,6 +15,12 @@ interface CGSdk {
     happytime(): void;
     settings?: { muteAudio?: boolean };
     addSettingsChangeListener?(cb: (s: { muteAudio?: boolean }) => void): void;
+    // Multiplayer invites (rooms shared through the portal).
+    isInstantMultiplayer?: boolean;
+    inviteLink?(params: Record<string, string>): string;
+    getInviteParam?(key: string): string | null;
+    showInviteButton?(params: Record<string, string>): string;
+    hideInviteButton?(): void;
   };
   ad: {
     requestAd(type: AdType, cb: { adStarted?: () => void; adFinished?: () => void; adError?: (e: unknown) => void }): void;
@@ -120,6 +126,56 @@ class CrazyGamesWrapper {
         adError: () => done(false),
       });
     });
+  }
+
+  // ---------------------------------------------------------------- multiplayer invites
+
+  /** Link that drops a friend straight into room `code` (a plain ?room= link outside CrazyGames). */
+  inviteLink(code: string): string {
+    try {
+      const link = this.sdk?.game.inviteLink?.({ roomId: code });
+      if (link) return link;
+    } catch {
+      /* fall through */
+    }
+    const url = new URL(location.href);
+    url.search = '';
+    url.hash = '';
+    url.searchParams.set('room', code);
+    return url.toString();
+  }
+
+  /** Room code this page was opened with (CrazyGames invite or ?room=), if any. */
+  inviteCode(): string | null {
+    try {
+      const code = this.sdk?.game.getInviteParam?.('roomId');
+      if (code) return code;
+    } catch {
+      /* fall through */
+    }
+    return new URLSearchParams(location.search).get('room');
+  }
+
+  /** CrazyGames asked to put the player straight into a multiplayer match. */
+  get instantMultiplayer(): boolean {
+    return !!this.sdk?.game.isInstantMultiplayer;
+  }
+
+  /** The portal's own "Invite friends" button, shown while in a private room. */
+  showInviteButton(code: string): void {
+    try {
+      this.sdk?.game.showInviteButton?.({ roomId: code });
+    } catch {
+      /* optional */
+    }
+  }
+
+  hideInviteButton(): void {
+    try {
+      this.sdk?.game.hideInviteButton?.();
+    } catch {
+      /* optional */
+    }
   }
 
   async getUsername(): Promise<string | null> {

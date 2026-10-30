@@ -179,6 +179,10 @@ const ICONS: Record<string, string> = {
   pause: svg(`<rect x="16" y="12" width="11" height="40" rx="4" fill="${INK}"/><rect x="37" y="12" width="11" height="40" rx="4" fill="${INK}"/>`),
   left: svg(`<path d="M38 14L20 32l18 18" stroke="${INK}" stroke-width="8" fill="none" stroke-linecap="round" stroke-linejoin="round"/>`),
   right: svg(`<path d="M26 14l18 18-18 18" stroke="${INK}" stroke-width="8" fill="none" stroke-linecap="round" stroke-linejoin="round"/>`),
+  crown: svg(
+    `<path d="M8 22l12 10 12-18 12 18 12-10-5 28H13z" fill="#ffc93c" stroke="${INK}" stroke-width="4" stroke-linejoin="round"/>
+     <circle cx="32" cy="38" r="4" fill="#ff5a5f" stroke="${INK}" stroke-width="2.5"/>`,
+  ),
   trophy: svg(
     `<path d="M18 8h28v14c0 9-6 16-14 16S18 31 18 22z" fill="#ffc93c" stroke="${INK}" stroke-width="4" stroke-linejoin="round"/>
      <path d="M18 14H9c0 9 5 13 11 13M46 14h9c0 9-5 13-11 13" stroke="${INK}" stroke-width="4" fill="none"/>

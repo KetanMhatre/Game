@@ -71,6 +71,15 @@ async function boot() {
   new AccountPanel(document.getElementById('ui')!, ui.menuCorner, () => ui.config.name, loadStats);
   void Account.start();
 
+  // Opened from an invite link: straight into that room. CrazyGames "instant multiplayer": Quick Play.
+  const invite = CrazyGames.inviteCode();
+  if (invite) {
+    history.replaceState(null, '', location.pathname);
+    ui.onJoinRoom(invite, ui.playConfig());
+  } else if (CrazyGames.instantMultiplayer) {
+    ui.onQuickPlay(ui.playConfig());
+  }
+
   // Dev shortcut: ?autoplay=pond|lake|sea jumps straight into a match.
   if (import.meta.env.DEV) {
     Object.assign(window, { __game: game, __account: Account }); // for automated tests

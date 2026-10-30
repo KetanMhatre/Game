@@ -3,8 +3,16 @@ import { BOAT, MAX_HP, WEAPONS, type WeaponId } from './config';
 import { BoatModel, RIDE_HEIGHT } from './BoatModel';
 import type { SpeciesId } from './Character';
 import type { Arena } from './Arena';
-import { clamp, damp } from './util';
+import { angleDiff, clamp, damp } from './util';
 import { waveHeight } from './waves';
+import { POSE_ALIVE, POSE_PROTECT, POSE_SHIELD, POSE_STUN, type PoseMsg } from '../../shared/protocol';
+
+/** Remote boats are drawn this far in the past so there are always two poses to blend between. */
+export const INTERP_DELAY_MS = 110;
+
+interface Snapshot extends PoseMsg {
+  at: number;
+}
 
 /**
  * Everything a boat needs from its controller each tick. Player, bots and (later)
@@ -49,6 +57,11 @@ export class Boat {
   lastHitT = 0;
   /** Name tags are hidden for the menu's background boats. */
   labelEnabled = true;
+  /** Online id (session id, or "bot-N"). Solo boats get local ids so weapons can refer to them. */
+  netId = '';
+  /** Simulated on this machine (my boat, or bots when I'm the bot host). Others follow network poses. */
+  owned = true;
+  private snaps: Snapshot[] = [];
 
   private pitch = 0;
   private roll = 0;
@@ -162,17 +175,29 @@ export class Boat {
     return false;
   }
 
+  /** Current smoothed rudder (-1..1) and throttle, sent to other players for the sailor animation. */
+  get steerAmount(): number {
+    return this.steer;
+  }
+
+  get throttleAmount(): number {
+    return this.throttle;
+  }
+
+  private sink(dt: number, arena: Arena, time: number): void {
+    this.sinkT += dt;
+    const wy = waveHeight(this.x, this.z, time, arena.map.waveAmp);
+    this.model.root.position.set(this.x, wy - this.sinkT * 1.2, this.z);
+    this.model.tilt.rotation.x = Math.min(1.2, this.sinkT * 1.5);
+    this.model.tilt.rotation.z = Math.min(0.6, this.sinkT * 0.8);
+    if (this.sinkT > 2.2) this.model.root.visible = false;
+  }
+
   update(dt: number, arena: Arena, time: number): number {
-    const amp = arena.map.waveAmp;
     if (!this.alive) {
       // Sinking animation, then respawn is handled by Game.
-      this.sinkT += dt;
       this.respawnT -= dt;
-      const wy = waveHeight(this.x, this.z, time, amp);
-      this.model.root.position.set(this.x, wy - this.sinkT * 1.2, this.z);
-      this.model.tilt.rotation.x = Math.min(1.2, this.sinkT * 1.5);
-      this.model.tilt.rotation.z = Math.min(0.6, this.sinkT * 0.8);
-      if (this.sinkT > 2.2) this.model.root.visible = false;
+      this.sink(dt, arena, time);
       return 0;
     }
 
@@ -246,6 +271,15 @@ export class Boat {
     this.vx = v.x;
     this.vz = v.z;
 
+    this.present(dt, arena, time, vF, thr);
+    return impact;
+  }
+
+  /** Wave riding (pitch/roll/bob), model placement, sailor animation and shield visuals. */
+  private present(dt: number, arena: Arena, time: number, vF: number, thr: number): void {
+    const amp = arena.map.waveAmp;
+    const fx = Math.sin(this.heading), fz = Math.cos(this.heading);
+    const rx = -Math.cos(this.heading), rz = Math.sin(this.heading);
     // Ride the waves: sample height under bow/stern/sides for pitch & roll.
     const h = waveHeight(this.x, this.z, time, amp);
     const hF = waveHeight(this.x + fx * 1.2, this.z + fz * 1.2, time, amp);
@@ -276,8 +310,135 @@ export class Boat {
       this.model.setShieldOpacity(o);
       sh.rotation.y += dt;
     }
+  }
 
-    return impact;
+  // ---------------------------------------------------------------- network (remote boats)
+
+  /** Owner's state for the network. */
+  pose(): PoseMsg {
+    const r = (v: number, d = 100) => Math.round(v * d) / d;
+    const f = (this.alive ? POSE_ALIVE : 0) | (this.shieldT > 0 ? POSE_SHIELD : 0) | (this.protectT > 0 ? POSE_PROTECT : 0) | (this.stunT > 0 ? POSE_STUN : 0);
+    return {
+      id: this.netId, x: r(this.x), z: r(this.z), h: r(this.heading, 1000), vx: r(this.vx), vz: r(this.vz),
+      hp: r(this.hp), f, w: this.weapon ?? '', s: r(this.steer), t: r(this.throttle),
+    };
+  }
+
+  pushSnapshot(p: PoseMsg, at: number): void {
+    const last = this.snaps[this.snaps.length - 1];
+    if (last) {
+      if (at <= last.at) at = last.at + 1;
+      // Respawned (or teleported): jump there instead of gliding across the map.
+      const revived = !(last.f & POSE_ALIVE) && p.f & POSE_ALIVE;
+      if (revived || (last.x - p.x) ** 2 + (last.z - p.z) ** 2 > 144) this.snaps.length = 0;
+    }
+    this.snaps.push({ ...p, at });
+    if (this.snaps.length > 20) this.snaps.shift();
+    if (p.hp !== this.hp) {
+      this.hp = p.hp;
+      this.drawLabel();
+    }
+  }
+
+  /** The owner reported a hit on this (remote) boat. */
+  showHit(hp: number, amount: number): void {
+    if (amount >= 0.5 || Math.random() < 0.25) this.model.character.hit();
+    if (hp !== this.hp) {
+      this.hp = hp;
+      this.drawLabel();
+    }
+  }
+
+  get hasSnapshots(): boolean {
+    return this.snaps.length > 0;
+  }
+
+  /**
+   * Follows network poses: blends between the two around (now - delay), extrapolating briefly if late.
+   * Returns true when the boat just respawned.
+   */
+  updateRemote(dt: number, arena: Arena, time: number, now: number): boolean {
+    const snaps = this.snaps;
+    if (!snaps.length) {
+      this.model.root.visible = false;
+      return false;
+    }
+    const latest = snaps[snaps.length - 1];
+    const renderAt = now - INTERP_DELAY_MS;
+    let a = snaps[0], b = snaps[0];
+    for (let i = snaps.length - 1; i >= 0; i--) {
+      if (snaps[i].at <= renderAt) {
+        a = snaps[i];
+        b = snaps[Math.min(i + 1, snaps.length - 1)];
+        break;
+      }
+    }
+    if (renderAt >= latest.at) {
+      const ahead = Math.min(0.25, (renderAt - latest.at) / 1000);
+      this.x = latest.x + latest.vx * ahead;
+      this.z = latest.z + latest.vz * ahead;
+      this.heading = latest.h;
+    } else if (a !== b) {
+      const k = clamp((renderAt - a.at) / (b.at - a.at), 0, 1);
+      this.x = a.x + (b.x - a.x) * k;
+      this.z = a.z + (b.z - a.z) * k;
+      this.heading = a.h + angleDiff(a.h, b.h) * k;
+    } else {
+      this.x = a.x;
+      this.z = a.z;
+      this.heading = a.h;
+    }
+    this.vx = latest.vx;
+    this.vz = latest.vz;
+
+    // Flags come from the newest pose so deaths and shields show up without delay.
+    const alive = (latest.f & POSE_ALIVE) !== 0;
+    const revived = alive && !this.alive;
+    if (revived) {
+      this.alive = true;
+      this.sinkT = 0;
+      this.pitch = this.roll = 0;
+      this.model.tilt.rotation.set(0, 0, 0);
+    } else if (!alive && this.alive) {
+      this.alive = false;
+      this.sinkT = 0;
+      this.weapon = null;
+      this.model.setMount(null);
+    }
+    this.shieldT = latest.f & POSE_SHIELD ? 1 : 0;
+    this.protectT = latest.f & POSE_PROTECT ? 1 : 0;
+    this.stunT = latest.f & POSE_STUN ? 1 : 0;
+    const w = (latest.w || null) as WeaponId | null;
+    if (w !== this.weapon) {
+      this.weapon = w;
+      this.model.setMount(w);
+    }
+    if (!this.alive) {
+      this.sink(dt, arena, time);
+      return false;
+    }
+    this.model.root.visible = true;
+    this.steer += (latest.s - this.steer) * damp(10, dt);
+    this.throttle += (latest.t - this.throttle) * damp(10, dt);
+    this.yawRate = this.steer * BOAT.turnRate * 0.8;
+    const vF = this.vx * Math.sin(this.heading) + this.vz * Math.cos(this.heading);
+    this.accelF *= Math.exp(-4 * dt);
+    this.present(dt, arena, time, vF, this.throttle);
+    return revived;
+  }
+
+  /** This machine takes over simulating a boat that was remote (e.g. became the bot host). */
+  takeOver(): void {
+    const latest = this.snaps[this.snaps.length - 1];
+    if (latest && !(latest.f & POSE_ALIVE)) {
+      this.alive = false;
+      this.respawnT = 1;
+    }
+    // Whatever it was holding is used up after one more shot (the old owner knew the ammo count).
+    this.ammo = this.weapon ? 1 : 0;
+    this.shieldT = this.protectT = this.stunT = 0;
+    this.snaps.length = 0;
+    this.owned = true;
   }
 
   /** Name tag + health pips floating above rival boats (chunky outlined text, matching the HUD). */

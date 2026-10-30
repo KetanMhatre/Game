@@ -42,7 +42,8 @@ export class Maelstrom implements WeaponFx {
     this.v.mesh.scale.set(s, s, 1);
 
     for (const b of c.host.boats) {
-      if (b === this.owner || !b.alive || b.invulnerable) continue;
+      // Online, every machine pulls only the boats it simulates.
+      if (b === this.owner || !b.alive || b.invulnerable || !b.owned) continue;
       const dx = this.x - b.x, dz = this.z - b.z;
       const d = Math.hypot(dx, dz) || 0.01;
       if (d > R) continue;

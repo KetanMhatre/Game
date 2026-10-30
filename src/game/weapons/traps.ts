@@ -12,6 +12,8 @@ const beaconLit = new THREE.Color(0xff2d2d);
 export class NavalMine implements WeaponFx {
   private m = navalMineModel();
   private t = 0;
+  private done = false;
+  netId?: string;
 
   constructor(
     private c: Combat,
@@ -40,20 +42,30 @@ export class NavalMine implements WeaponFx {
     const blink = armed ? Math.sin(this.t * 10) > 0 : Math.sin(this.t * 3) > 0.6;
     this.m.beaconMat.color.copy(blink ? beaconLit : beaconIdle);
     (this.m.ring.material as THREE.MeshBasicMaterial).opacity = armed ? 0.3 + 0.35 * (0.5 + 0.5 * Math.sin(this.t * 9)) : 0;
+    if (this.done) return false;
     if (this.t > M.life) {
       c.host.particles.splash(this.x, wy, this.z, 0.5);
       return false;
     }
     if (!armed) return true;
+    // Each machine checks only its own boats; other players' machines report their triggers (trigger()).
     for (const b of c.host.boats) {
-      if (!b.alive || (b === this.owner && this.t < 1.5)) continue;
+      if (!b.alive || !b.owned || (b === this.owner && this.t < 1.5)) continue;
       if ((b.x - this.x) ** 2 + (b.z - this.z) ** 2 < (M.trigger + b.radius) ** 2) {
-        c.explode(this.x, wy + 0.4, this.z, true);
-        c.damageArea(this.x, this.z, M.blast, M.damage, this.owner, 'mines', M.knock, this.t < 1.5);
+        this.trigger();
+        if (this.netId) c.host.onTrap?.(this.netId);
         return false;
       }
     }
     return true;
+  }
+
+  trigger(): void {
+    if (this.done) return;
+    this.done = true;
+    const c = this.c, M = T.mines;
+    c.explode(this.x, c.waveY(this.x, this.z) + 0.4, this.z, true);
+    c.damageArea(this.x, this.z, M.blast, M.damage, this.owner, 'mines', M.knock, this.t < 1.5);
   }
 
   dispose(): void {
@@ -68,6 +80,8 @@ export class NavalMine implements WeaponFx {
 export class FakeCrate implements WeaponFx {
   private m = crateModel(true);
   private t = 0;
+  private done = false;
+  netId?: string;
   private p: Parameters<typeof animateCrate>[0];
 
   constructor(
@@ -91,20 +105,29 @@ export class FakeCrate implements WeaponFx {
     this.t += dt;
     const wy = c.waveY(this.x, this.z);
     animateCrate(this.p, wy, c.time, dt);
+    if (this.done) return false;
     if (this.t > F.life) {
       c.host.particles.sparkle(this.x, wy + 1, this.z, 0xff8fa3);
       return false;
     }
     for (const b of c.host.boats) {
-      if (!b.alive || b === this.owner) continue;
+      if (!b.alive || !b.owned || b === this.owner) continue;
       if ((b.x - this.x) ** 2 + (b.z - this.z) ** 2 < (b.radius + 1.3) ** 2) {
-        c.explode(this.x, wy + 0.6, this.z, true);
-        c.damageArea(this.x, this.z, F.blast, F.damage, this.owner, 'fakeCrate', F.knock, true);
-        Sfx.trap(c.host.listenerDist(this.x, this.z));
+        this.trigger();
+        if (this.netId) c.host.onTrap?.(this.netId);
         return false;
       }
     }
     return true;
+  }
+
+  trigger(): void {
+    if (this.done) return;
+    this.done = true;
+    const c = this.c, F = T.fakeCrate;
+    c.explode(this.x, c.waveY(this.x, this.z) + 0.6, this.z, true);
+    c.damageArea(this.x, this.z, F.blast, F.damage, this.owner, 'fakeCrate', F.knock, true);
+    Sfx.trap(c.host.listenerDist(this.x, this.z));
   }
 
   dispose(): void {

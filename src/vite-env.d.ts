@@ -8,6 +8,8 @@ interface ImportMetaEnv {
   readonly VITE_FIREBASE_MESSAGING_SENDER_ID?: string;
   readonly VITE_FIREBASE_APP_ID?: string;
   readonly VITE_FIREBASE_MEASUREMENT_ID?: string;
+  /** Multiplayer server, e.g. wss://nutshell-navy.example.com (defaults to ws://<this host>:2567). */
+  readonly VITE_GAME_SERVER_URL?: string;
 }
 
 interface ImportMeta {

@@ -7,9 +7,11 @@
     "dev": "vite --host",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview --host",
-    "zip": "npm run build && cd dist && zip -r ../nutshell-navy.zip ."
+    "zip": "npm run build && cd dist && zip -r ../nutshell-navy.zip .",
+    "server": "npm --prefix server run dev"
   },
   "dependencies": {
+    "@colyseus/sdk": "^0.18.8",
     "firebase": "^13.1.0",
     "three": "^0.170.0"
   },

@@ -2,6 +2,7 @@ import { MAPS, MAX_HP, PLAYER_COLORS, WEAPONS, WEAPON_ORDER, type MapId, type We
 import { SPECIES, type SpeciesId } from '../game/Character';
 import type { QualitySetting } from '../game/Game';
 import { icon, medal } from './icons';
+import { CODE_LENGTH, ROOM_SIZE, normalizeCode, type SettingsMsg } from '../../shared/protocol';
 
 export interface PlayConfig {
   name: string;
@@ -18,6 +19,19 @@ export interface ScoreRow {
   kills: number;
   deaths: number;
   isPlayer: boolean;
+}
+
+/** The room lobby (private rooms between matches, or waiting for the next public match). */
+export interface LobbyView {
+  code: string;
+  isPrivate: boolean;
+  isHost: boolean;
+  map: MapId;
+  arsenal: WeaponId[];
+  bots: boolean;
+  players: { name: string; color: number; isBot: boolean; isHost: boolean; isMe: boolean }[];
+  status: string;
+  canStart: boolean;
 }
 
 export interface HudState {
@@ -37,6 +51,23 @@ const ordinal = (n: number) => {
 };
 const QUALITY_LABEL: Record<QualitySetting, string> = { auto: 'Auto', high: 'High', low: 'Low' };
 
+/** Clipboard API needs https/localhost; fall back to the old copy command on plain-http LAN tests. */
+async function copyText(text: string): Promise<boolean> {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.cssText = 'position:fixed;opacity:0';
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand('copy');
+    ta.remove();
+    return ok;
+  }
+}
+
 /** Saved arsenals may be missing, empty or contain removed weapons: fall back to everything. */
 function validArsenal(list: unknown): WeaponId[] {
   const ok = Array.isArray(list) ? WEAPON_ORDER.filter((id) => list.includes(id)) : [];
@@ -54,8 +85,19 @@ export class UI {
   onPauseClick: () => void = () => {};
   onMuteToggle: () => boolean = () => false;
   onQualityChange: (q: QualitySetting) => void = () => {};
+  // Online play
+  onQuickPlay: (cfg: PlayConfig) => void = () => {};
+  onCreateRoom: (cfg: PlayConfig) => void = () => {};
+  onJoinRoom: (code: string, cfg: PlayConfig) => void = () => {};
+  onCancelConnect: () => void = () => {};
+  onLobbySettings: (s: SettingsMsg) => void = () => {};
+  onLobbyStart: () => void = () => {};
+  onLeaveRoom: () => void = () => {};
+  inviteLink: (code: string) => string = (code) => code;
 
   private menu: HTMLDivElement;
+  private lobby: HTMLDivElement;
+  private modal: HTMLDivElement;
   private arsenalEl: HTMLDivElement;
   private hud: HTMLDivElement;
   private pause: HTMLDivElement;
@@ -78,6 +120,8 @@ export class UI {
   private lastHp = -1;
   private lastRank = '';
   private quality: QualitySetting = 'auto';
+  private lobbyView: LobbyView | null = null;
+  private lobbyKeys = { players: '', settings: '', status: '' };
 
   constructor(private root: HTMLElement, saved: Partial<PlayConfig>, private stats: { wins: number; bestKills: number }) {
     this.cfg = {
@@ -89,12 +133,14 @@ export class UI {
     };
     this.vignette = this.el('div', 'vignette');
     this.menu = this.el('div', 'screen menu');
+    this.lobby = this.el('div', 'screen menu lobby hidden');
     this.arsenalEl = this.el('div', 'screen overlay hidden');
     this.hud = this.el('div', 'hud hidden');
     this.pause = this.el('div', 'screen overlay hidden');
     this.end = this.el('div', 'screen overlay hidden');
     this.center = this.el('div', 'center-msg');
     this.toast = this.el('div', 'toast');
+    this.modal = this.el('div', 'screen overlay hidden');
     this.buildMenu();
     this.buildHud();
   }
@@ -120,6 +166,12 @@ export class UI {
     this.cfg.name = name;
     const input = this.menu.querySelector<HTMLInputElement>('.name-input');
     if (input) input.value = name;
+  }
+
+  /** Right edge (px) of the menu or lobby card, so the 3D showcase can sit in the space beside it. */
+  get panelRight(): number {
+    const el = !this.lobby.classList.contains('hidden') ? this.lobby.firstElementChild : !this.menu.classList.contains('hidden') ? this.menu.firstElementChild : null;
+    return el ? el.getBoundingClientRect().right : 0;
   }
 
   /** Top-right corner of the menu (hosts the account and sound buttons). */
@@ -193,7 +245,12 @@ export class UI {
           <div class="maps">${maps}</div>
           <button class="btn btn-alt arsenal-btn"><span class="ab-ics">${['torpedoes', 'deckGun', 'maelstrom'].map((w) => `<i>${icon(w)}</i>`).join('')}</span>
             <span class="ab-label">Arsenal</span><b class="ab-count"></b></button>
-          <button class="btn btn-play">PLAY</button>
+          <button class="btn btn-play btn-online">PLAY ONLINE</button>
+          <div class="room-btns">
+            <button class="btn btn-alt btn-create">Create Room</button>
+            <button class="btn btn-alt btn-join">Join Room</button>
+          </div>
+          <button class="link solo-link">or practice offline vs bots</button>
           <div class="stats">${this.statsHtml()}</div>
           <div class="help">WASD / Arrows to steer · Space or Click to fire · Esc to pause</div>
         </div>
@@ -225,14 +282,26 @@ export class UI {
     };
     this.menu.querySelector('.prev')!.addEventListener('click', () => step(-1));
     this.menu.querySelector('.next')!.addEventListener('click', () => step(1));
-    this.menu.querySelector('.btn-play')!.addEventListener('click', () => {
-      if (!this.cfg.name) this.cfg.name = 'Captain';
-      this.onPlay({ ...this.cfg, arsenal: [...this.cfg.arsenal] });
-    });
-    this.menu.querySelector('.arsenal-btn')!.addEventListener('click', () => this.openArsenal());
+    const go = (fn: (cfg: PlayConfig) => void) => () => fn(this.playConfig());
+    this.menu.querySelector('.btn-online')!.addEventListener('click', go((c) => this.onQuickPlay(c)));
+    this.menu.querySelector('.btn-create')!.addEventListener('click', go((c) => this.onCreateRoom(c)));
+    this.menu.querySelector('.btn-join')!.addEventListener('click', () => this.showJoin());
+    this.menu.querySelector('.solo-link')!.addEventListener('click', go((c) => this.onPlay(c)));
+    this.menu.querySelector('.arsenal-btn')!.addEventListener('click', () =>
+      this.openArsenal(this.cfg.arsenal, (ids) => {
+        this.cfg.arsenal = ids;
+        this.renderArsenalCount();
+      }),
+    );
     this.bindMute(this.menu);
     this.renderPicker();
     this.renderArsenalCount();
+  }
+
+  /** Snapshot of the menu choices for starting a match or joining a room. */
+  playConfig(): PlayConfig {
+    if (!this.cfg.name) this.cfg.name = 'Captain';
+    return { ...this.cfg, arsenal: [...this.cfg.arsenal] };
   }
 
   private renderArsenalCount(): void {
@@ -243,8 +312,8 @@ export class UI {
   // ---------------------------------------------------------------- arsenal
 
   /** Weapon picker: toggle which weapons crates can roll. Edits a draft; Done applies it. */
-  private openArsenal(): void {
-    const draft = new Set<WeaponId>(this.cfg.arsenal);
+  private openArsenal(initial: WeaponId[], apply: (ids: WeaponId[]) => void): void {
+    const draft = new Set<WeaponId>(initial);
     const items = WEAPON_ORDER.map((id) => {
       const w = WEAPONS[id];
       return `<button class="ars-item" data-w="${id}" aria-pressed="true">
@@ -308,8 +377,7 @@ export class UI {
         desc.classList.add('warn');
         return;
       }
-      this.cfg.arsenal = WEAPON_ORDER.filter((id) => draft.has(id));
-      this.renderArsenalCount();
+      apply(WEAPON_ORDER.filter((id) => draft.has(id)));
       this.arsenalEl.classList.add('hidden');
     });
     sync();
@@ -352,6 +420,8 @@ export class UI {
 
   showMenu(): void {
     this.menu.classList.remove('hidden');
+    this.lobby.classList.add('hidden');
+    this.modal.classList.add('hidden');
     this.arsenalEl.classList.add('hidden');
     this.hud.classList.add('hidden');
     this.pause.classList.add('hidden');
@@ -362,6 +432,8 @@ export class UI {
 
   showHud(): void {
     this.menu.classList.add('hidden');
+    this.lobby.classList.add('hidden');
+    this.modal.classList.add('hidden');
     this.arsenalEl.classList.add('hidden');
     this.end.classList.add('hidden');
     this.pause.classList.add('hidden');
@@ -371,17 +443,19 @@ export class UI {
     this.lastHp = -1;
   }
 
-  showPause(show: boolean, quality: QualitySetting): void {
+  /** Pause menu. Online the match keeps going underneath, so it's just a menu. */
+  showPause(show: boolean, quality: QualitySetting, online = false): void {
     this.quality = quality;
     if (!show) {
       this.pause.classList.add('hidden');
       return;
     }
     this.pause.innerHTML = `<div class="card small">
-      <h2 class="title">Paused</h2>
-      <button class="btn btn-play resume">Resume</button>
+      <h2 class="title">${online ? 'Menu' : 'Paused'}</h2>
+      ${online ? '<p class="tag">The match is still going!</p>' : ''}
+      <button class="btn btn-play resume">${online ? 'Back to battle' : 'Resume'}</button>
       <button class="btn btn-alt quality">Graphics: <b>${QUALITY_LABEL[this.quality]}</b></button>
-      <button class="btn btn-alt quit">Quit to menu</button></div>`;
+      <button class="btn btn-alt quit">${online ? 'Leave room' : 'Quit to menu'}</button></div>`;
     this.pause.querySelector('.resume')!.addEventListener('click', () => this.onResume());
     this.pause.querySelector('.quit')!.addEventListener('click', () => this.onQuit());
     const qb = this.pause.querySelector<HTMLButtonElement>('.quality')!;
@@ -394,7 +468,8 @@ export class UI {
     this.pause.classList.remove('hidden');
   }
 
-  showEnd(rows: ScoreRow[], playerRank: number): void {
+  /** Results. Online there's no "play again": the room moves on by itself (see setEndNote). */
+  showEnd(rows: ScoreRow[], playerRank: number, online = false): void {
     this.hud.classList.add('hidden');
     this.center.innerHTML = '';
     this.toast.innerHTML = '';
@@ -412,10 +487,213 @@ export class UI {
       <h2 class="title">${title}</h2>
       <p class="tag">You placed <b>${ordinal(playerRank)}</b> of ${rows.length}</p>
       <div class="results">${list}</div>
-      <div class="end-btns"><button class="btn btn-play again">Play again</button><button class="btn btn-alt menu-btn">Change waters</button></div></div>`;
-    this.end.querySelector('.again')!.addEventListener('click', () => this.onAgain());
+      ${
+        online
+          ? '<p class="end-note"></p><div class="end-btns one"><button class="btn btn-alt menu-btn">Leave room</button></div>'
+          : '<div class="end-btns"><button class="btn btn-play again">Play again</button><button class="btn btn-alt menu-btn">Change waters</button></div>'
+      }</div>`;
+    this.end.querySelector('.again')?.addEventListener('click', () => this.onAgain());
     this.end.querySelector('.menu-btn')!.addEventListener('click', () => this.onQuit());
     this.end.classList.remove('hidden');
+  }
+
+  setEndNote(text: string): void {
+    const el = this.end.querySelector('.end-note');
+    if (el && el.textContent !== text) el.textContent = text;
+  }
+
+  // ---------------------------------------------------------------- online: join / connecting / errors
+
+  private openModal(html: string): HTMLDivElement {
+    this.modal.innerHTML = html;
+    this.modal.classList.remove('hidden');
+    return this.modal;
+  }
+
+  closeModal(): void {
+    this.modal.classList.add('hidden');
+    this.modal.innerHTML = '';
+  }
+
+  private showJoin(): void {
+    const m = this.openModal(`<div class="card small join-card">
+      <button class="x-btn" aria-label="Close">${icon('close')}</button>
+      <h2 class="title">Join Room</h2>
+      <p class="tag">Enter the ${CODE_LENGTH}-letter code from your friend</p>
+      <input class="code-input" maxlength="${CODE_LENGTH + 2}" placeholder="${'•'.repeat(CODE_LENGTH)}" autocomplete="off" autocapitalize="characters" spellcheck="false" />
+      <div class="acc-msg"></div>
+      <button class="btn btn-play join-go">Join</button></div>`);
+    const input = m.querySelector<HTMLInputElement>('.code-input')!;
+    const msg = m.querySelector<HTMLDivElement>('.acc-msg')!;
+    const submit = () => {
+      const code = normalizeCode(input.value);
+      if (code.length !== CODE_LENGTH) {
+        msg.className = 'acc-msg error';
+        msg.textContent = `Room codes have ${CODE_LENGTH} letters.`;
+        return;
+      }
+      this.onJoinRoom(code, this.playConfig());
+    };
+    input.addEventListener('input', () => (input.value = normalizeCode(input.value)));
+    input.addEventListener('keydown', (e) => {
+      e.stopPropagation();
+      if (e.key === 'Enter') submit();
+      if (e.key === 'Escape') this.closeModal();
+    });
+    m.querySelector('.join-go')!.addEventListener('click', submit);
+    m.querySelector('.x-btn')!.addEventListener('click', () => this.closeModal());
+    setTimeout(() => input.focus(), 50);
+  }
+
+  showConnecting(text: string): void {
+    const m = this.openModal(`<div class="card small">
+      <div class="spinner"></div>
+      <h2 class="title connecting">${esc(text)}</h2>
+      <button class="btn btn-alt cancel">Cancel</button></div>`);
+    m.querySelector('.cancel')!.addEventListener('click', () => {
+      this.closeModal();
+      this.onCancelConnect();
+    });
+  }
+
+  showError(text: string): void {
+    const m = this.openModal(`<div class="card small">
+      <h2 class="title">Ahoy!</h2>
+      <p class="tag err-text">${esc(text)}</p>
+      <button class="btn btn-play ok">OK</button>
+      <button class="link solo">Practice offline vs bots instead</button></div>`);
+    m.querySelector('.ok')!.addEventListener('click', () => this.closeModal());
+    m.querySelector('.solo')!.addEventListener('click', () => {
+      this.closeModal();
+      this.onPlay(this.playConfig());
+    });
+  }
+
+  // ---------------------------------------------------------------- online: room lobby
+
+  showLobby(view: LobbyView): void {
+    this.menu.classList.add('hidden');
+    this.hud.classList.add('hidden');
+    this.pause.classList.add('hidden');
+    this.end.classList.add('hidden');
+    this.modal.classList.add('hidden');
+    this.center.innerHTML = '';
+    this.lobby.innerHTML = `<div class="card lobby-card">
+      <h2 class="title">${view.isPrivate ? 'Private Room' : 'Quick Play'}</h2>
+      ${
+        view.isPrivate
+          ? `<div class="code-row">
+              <div class="code-box"><span class="code-lbl">Room code</span><b class="code">${esc(view.code)}</b></div>
+              <button class="btn btn-alt copy-code">Copy code</button>
+              <button class="btn btn-alt copy-link">Invite link</button>
+            </div>`
+          : ''
+      }
+      <label class="lbl">Captains <span class="lp-count"></span></label>
+      <div class="lobby-players"></div>
+      <div class="lobby-settings"></div>
+      <div class="lobby-status"></div>
+      <div class="lobby-btns">
+        <button class="btn btn-alt leave">Leave</button>
+        <button class="btn btn-play start hidden">START</button>
+      </div></div>`;
+    const copy = (btn: HTMLButtonElement, text: string) => {
+      const label = btn.textContent;
+      void copyText(text).then((ok) => {
+        btn.textContent = ok ? 'Copied!' : 'Copy failed';
+        setTimeout(() => (btn.textContent = label), 1500);
+      });
+    };
+    this.lobby.querySelector<HTMLButtonElement>('.copy-code')?.addEventListener('click', (e) =>
+      copy(e.currentTarget as HTMLButtonElement, this.lobbyView?.code ?? ''),
+    );
+    this.lobby.querySelector<HTMLButtonElement>('.copy-link')?.addEventListener('click', (e) =>
+      copy(e.currentTarget as HTMLButtonElement, this.inviteLink(this.lobbyView?.code ?? '')),
+    );
+    this.lobby.querySelector('.leave')!.addEventListener('click', () => this.onLeaveRoom());
+    this.lobby.querySelector('.start')!.addEventListener('click', () => this.onLobbyStart());
+    this.lobbyKeys = { players: '', settings: '', status: '' };
+    this.lobbyView = null;
+    this.updateLobby(view);
+    this.lobby.classList.remove('hidden');
+  }
+
+  get lobbyOpen(): boolean {
+    return !this.lobby.classList.contains('hidden');
+  }
+
+  /** Refreshes only the parts of the lobby that changed (so buttons don't flicker under the cursor). */
+  updateLobby(view: LobbyView): void {
+    this.lobbyView = view;
+    const L = this.lobby;
+    const pKey = JSON.stringify(view.players);
+    if (pKey !== this.lobbyKeys.players) {
+      this.lobbyKeys.players = pKey;
+      L.querySelector('.lp-count')!.textContent = `${view.players.filter((p) => !p.isBot).length} / ${ROOM_SIZE}`;
+      L.querySelector('.lobby-players')!.innerHTML = view.players
+        .map(
+          (p) => `<div class="lp-row ${p.isMe ? 'me' : ''} ${p.isBot ? 'bot' : ''}">
+            <span class="dot" style="background:${hex(p.color)}"></span><span class="nm">${esc(p.name)}</span>
+            ${p.isHost ? `<span class="lp-tag host"><i>${icon('crown')}</i>Host</span>` : ''}
+            ${p.isMe ? '<span class="lp-tag you">You</span>' : ''}${p.isBot ? '<span class="lp-tag">Bot</span>' : ''}</div>`,
+        )
+        .join('');
+    }
+    const sKey = `${view.isPrivate}|${view.isHost}|${view.map}|${view.arsenal.join()}|${view.bots}`;
+    if (sKey !== this.lobbyKeys.settings) {
+      this.lobbyKeys.settings = sKey;
+      this.renderLobbySettings(view);
+    }
+    const stKey = `${view.status}|${view.canStart}`;
+    if (stKey !== this.lobbyKeys.status) {
+      this.lobbyKeys.status = stKey;
+      L.querySelector('.lobby-status')!.textContent = view.status;
+      L.querySelector('.start')!.classList.toggle('hidden', !view.canStart);
+    }
+  }
+
+  private renderLobbySettings(view: LobbyView): void {
+    const el = this.lobby.querySelector<HTMLDivElement>('.lobby-settings')!;
+    const m = MAPS[view.map];
+    if (!view.isPrivate || !view.isHost) {
+      el.innerHTML = `<div class="lobby-summary"><span class="ls-ic">${icon(view.map)}</span><b>${m.name}</b>
+        <span>· ${view.arsenal.length}/${WEAPON_ORDER.length} weapons</span>${view.isPrivate ? `<span>· Bots ${view.bots ? 'on' : 'off'}</span>` : ''}</div>`;
+      return;
+    }
+    const maps = Object.values(MAPS)
+      .map(
+        (mm) => `<button class="map-card ${mm.id === view.map ? 'sel' : ''}" data-map="${mm.id}" style="--water:${hex(mm.waterShallow)};--deep:${hex(mm.waterDeep)}">
+          <span class="map-ic">${icon(mm.id)}</span><span class="map-name">${mm.name}</span></button>`,
+      )
+      .join('');
+    el.innerHTML = `<label class="lbl">Waters</label><div class="maps">${maps}</div>
+      <div class="lobby-opts">
+        <button class="btn btn-alt arsenal-btn"><span class="ab-label">Arsenal</span><b class="ab-count">${view.arsenal.length}/${WEAPON_ORDER.length}</b></button>
+        <button class="btn btn-alt bots-btn">Bots <b>${view.bots ? 'ON' : 'OFF'}</b></button>
+      </div>`;
+    el.querySelectorAll<HTMLButtonElement>('.map-card').forEach((b) =>
+      b.addEventListener('click', () => this.onLobbySettings({ map: b.dataset.map })),
+    );
+    el.querySelector('.arsenal-btn')!.addEventListener('click', () =>
+      this.openArsenal(view.arsenal, (ids) => this.onLobbySettings({ arsenal: ids })),
+    );
+    el.querySelector('.bots-btn')!.addEventListener('click', () => this.onLobbySettings({ bots: !view.bots }));
+  }
+
+  /** "Get ready" before an online countdown (there's an extra beat while everyone loads the map). */
+  getReady(sub: string): void {
+    this.message(`<div class="big ready">Get ready!</div><div class="sub">${esc(sub)}</div>`, 1.1);
+  }
+
+  /** Small info line in the kill feed (players joining/leaving). */
+  info(text: string): void {
+    const row = document.createElement('div');
+    row.className = 'feed-row info';
+    row.textContent = text;
+    this.feedEl.prepend(row);
+    while (this.feedEl.children.length > 5) this.feedEl.lastChild?.remove();
+    setTimeout(() => row.classList.add('fade'), 3500);
+    setTimeout(() => row.remove(), 4100);
   }
 
   updateHud(s: HudState, playerRespawn: number | null): void {

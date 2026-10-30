@@ -1,9 +1,9 @@
 import * as THREE from 'three';
 import { Arena, type Collider } from './Arena';
-import { Boat } from './Boat';
+import { Boat, INTERP_DELAY_MS } from './Boat';
 import { BoatModel, RIDE_HEIGHT } from './BoatModel';
 import { BotBrain } from './Bot';
-import { SPECIES, type SpeciesId } from './Character';
+import { SPECIES, speciesById, type SpeciesId } from './Character';
 import { Combat, type CombatHost } from './Combat';
 import { Input } from './Input';
 import { Particles } from './Particles';
@@ -13,15 +13,18 @@ import { Water } from './Water';
 import { Sfx } from './Audio';
 import {
   BOAT, BOT_COUNT, BOT_NAMES, MAPS, MATCH_SECONDS, PLAYER_COLORS, RESPAWN_SECONDS,
-  SPAWN_PROTECTION_SECONDS, type MapId, type WeaponId,
+  SPAWN_PROTECTION_SECONDS, WEAPONS, type MapId, type WeaponId,
 } from './config';
 import { angleDiff, damp } from './util';
 import { waveHeight } from './waves';
-import type { PlayConfig, ScoreRow, UI } from '../ui/UI';
+import type { LobbyView, PlayConfig, ScoreRow, UI } from '../ui/UI';
 import { CrazyGames } from '../sdk/crazygames';
 import { Account, cleanStats, type Stats } from '../services/Account';
+import type { NetSession, PlayerView } from '../net/NetSession';
+import { POSE_HZ, type FeedMsg, type FireMsg, type GaveMsg, type HitMsg, type Phase, type PoseMsg } from '../../shared/protocol';
 
-type State = 'menu' | 'countdown' | 'playing' | 'paused' | 'ended';
+/** 'lobby' = in an online room between matches (menu-style backdrop with the room screen on top). */
+type State = 'menu' | 'lobby' | 'countdown' | 'playing' | 'paused' | 'ended';
 export type QualitySetting = 'auto' | 'high' | 'low';
 
 /** Dev-only `?time=20` shortens matches for testing. */
@@ -82,6 +85,18 @@ export class Game implements CombatHost {
   private shadowSize = 0;
   private fpsFrames = 0;
   private fpsTime = 0;
+  /** Boats by id (network ids online; local ids in solo so shots can name their targets). */
+  private byId = new Map<string, Boat>();
+  // Online play
+  private net: NetSession | null = null;
+  /** The boats in the arena belong to an online match (not the menu/lobby backdrop). */
+  private onlineRound = false;
+  private netRound = -1;
+  private netPhase: Phase | null = null;
+  private connectSeq = 0;
+  private poseT = 0;
+  /** Online "pause": the menu is open but the match carries on. */
+  private menuOpen = false;
 
   constructor(canvas: HTMLCanvasElement, private ui: UI, quality: QualitySetting) {
     // MSAA is cheap on mobile tile-based GPUs and hides jaggies at the reduced pixel ratios used there.
@@ -116,7 +131,18 @@ export class Game implements CombatHost {
     };
     ui.onQualityChange = (q) => this.setQuality(q);
     ui.onAgain = () => void this.afterMatch(() => this.lastCfg && this.startMatch(this.lastCfg));
-    ui.onQuit = () => void this.afterMatch(() => this.toMenu());
+    ui.onQuit = () => (this.net ? this.leaveOnline() : void this.afterMatch(() => this.toMenu()));
+    ui.onQuickPlay = (cfg) => void this.goOnline('quick', cfg);
+    ui.onCreateRoom = (cfg) => void this.goOnline('create', cfg);
+    ui.onJoinRoom = (code, cfg) => void this.goOnline('join', cfg, code);
+    ui.onCancelConnect = () => this.connectSeq++;
+    ui.onLobbySettings = (msg) => this.net?.send('settings', msg);
+    ui.onLobbyStart = () => {
+      Sfx.click();
+      this.net?.send('start');
+    };
+    ui.onLeaveRoom = () => this.leaveOnline();
+    ui.inviteLink = (code) => CrazyGames.inviteLink(code);
 
     CrazyGames.onMuteChange = (m) => Sfx.setForcedMute(m);
     CrazyGames.onPauseChange = (p) => (this.adPaused = p);
@@ -164,13 +190,18 @@ export class Game implements CombatHost {
     this.resize();
   }
 
-  private startMatch(cfg: PlayConfig): void {
-    Sfx.unlock();
-    Sfx.click();
-    this.lastCfg = cfg;
+  private savePrefs(cfg: PlayConfig): void {
     const prefs = { ...cfg, quality: this.quality };
     CrazyGames.setItem('nn_prefs', JSON.stringify(prefs));
     Account.save({ name: cfg.name, prefs });
+  }
+
+  private startMatch(cfg: PlayConfig): void {
+    if (this.net) return;
+    Sfx.unlock();
+    Sfx.click();
+    this.lastCfg = cfg;
+    this.savePrefs(cfg);
     this.clearShowcase();
     this.loadMap(cfg.map);
     this.populate(cfg);
@@ -194,9 +225,16 @@ export class Game implements CombatHost {
     CrazyGames.gameplayStop();
     const rows = this.scoreRows();
     const rank = rows.findIndex((r) => r.isPlayer) + 1;
-    const p = this.player!;
+    this.recordResult(rank, true);
+    this.ui.showEnd(rows, rank);
+  }
+
+  private recordResult(rank: number, solo: boolean): void {
+    const p = this.player;
+    if (!p) return;
     const stats = loadStats();
-    if (rank === 1) {
+    // Online, a win needs at least one sink (nobody "wins" a match where no one scored).
+    if (rank === 1 && (solo || p.kills > 0)) {
       stats.wins++;
       CrazyGames.happytime();
       Sfx.win();
@@ -208,7 +246,6 @@ export class Game implements CombatHost {
     CrazyGames.setItem('nn_stats', JSON.stringify(stats));
     Account.save({ stats });
     this.ui.setStats(stats);
-    this.ui.showEnd(rows, rank);
   }
 
   /** Natural break between matches: show a midgame ad, then continue. */
@@ -220,6 +257,16 @@ export class Game implements CombatHost {
   }
 
   private togglePause(force?: boolean): void {
+    if (this.net) {
+      // Online the match can't stop for one player: just open/close the menu over it.
+      if (!this.onlineRound || this.state === 'ended') return;
+      const show = force ?? !this.menuOpen;
+      if (show === this.menuOpen) return;
+      this.menuOpen = show;
+      this.input.enabled = !show && this.state === 'playing';
+      this.ui.showPause(show, this.quality, true);
+      return;
+    }
     if (this.state !== 'playing' && this.state !== 'paused' && this.state !== 'countdown') return;
     if (this.state === 'countdown' && force !== true) return;
     const pause = force ?? this.state !== 'paused';
@@ -300,6 +347,7 @@ export class Game implements CombatHost {
       this.wakes.clear();
       this.boats = [];
       this.bots = [];
+      this.byId.clear();
       this.particles.clear();
       return;
     }
@@ -314,6 +362,7 @@ export class Game implements CombatHost {
     this.wakes.clear();
     this.boats = [];
     this.bots = [];
+    this.byId.clear();
     this.particles.clear();
 
     const map = MAPS[id];
@@ -337,16 +386,21 @@ export class Game implements CombatHost {
     const species = SPECIES.map((s) => s.id).filter((s) => s !== cfg?.character).sort(() => Math.random() - 0.5);
     // Crates only roll weapons enabled on the Arsenal screen (the menu backdrop uses all of them).
     this.combat.setArsenal(cfg?.arsenal ?? []);
+    this.combat.online = false;
+    this.combat.lag = 0;
+    this.onlineRound = false;
     this.player = null;
     if (cfg) {
       this.player = new Boat(cfg.name || 'You', cfg.color, true, cfg.character);
-      this.boats.push(this.player);
+      this.player.netId = 'me';
+      this.register(this.player);
     }
     const n = cfg ? BOT_COUNT : BOT_COUNT + 1;
     for (let i = 0; i < n; i++) {
       const b = new Boat(names[i], colors[i % colors.length], false, species[i % species.length]);
       b.labelEnabled = cfg !== null;
-      this.boats.push(b);
+      b.netId = `bot-${i + 1}`;
+      this.register(b);
       this.bots.push(new BotBrain(b, 0.45 + Math.random() * 0.45));
     }
     const spots = [...this.arena.spawnPoints].sort(() => Math.random() - 0.5);
@@ -354,11 +408,27 @@ export class Game implements CombatHost {
       const s = spots[i % spots.length];
       b.spawn(s.x, s.z, s.heading);
       b.update(0, this.arena, this.time);
-      this.world.add(b.model.root);
-      const w = new Wake();
-      this.wakes.set(b.id, w);
-      this.world.add(w.mesh);
     });
+  }
+
+  private register(b: Boat): void {
+    this.boats.push(b);
+    this.byId.set(b.netId, b);
+    this.world.add(b.model.root);
+    const w = new Wake();
+    this.wakes.set(b.id, w);
+    this.world.add(w.mesh);
+  }
+
+  private removeBoat(b: Boat): void {
+    this.boats = this.boats.filter((x) => x !== b);
+    this.bots = this.bots.filter((x) => x.boat !== b);
+    this.byId.delete(b.netId);
+    this.world.remove(b.model.root);
+    const w = this.wakes.get(b.id);
+    if (w) this.world.remove(w.mesh);
+    this.wakes.delete(b.id);
+    if (this.player === b) this.player = null;
   }
 
   private respawn(b: Boat): void {
@@ -403,7 +473,7 @@ export class Game implements CombatHost {
   }
 
   private buildShowcase(color: number, species: SpeciesId): void {
-    if (this.state !== 'menu') return;
+    if (this.state !== 'menu' && this.state !== 'lobby') return;
     this.clearShowcase();
     this.showcase = new BoatModel(color, species);
     this.world.add(this.showcase.root);
@@ -448,13 +518,23 @@ export class Game implements CombatHost {
       Sfx.hit();
       this.shake(0.5);
     }
+    const net = this.onlineRound ? this.net : null;
+    // Online, damage only ever lands on boats this machine owns: tell everyone else.
+    net?.send('hit', { victim: target.netId, by: from?.netId ?? null, w: icon, hp: target.hp } satisfies HitMsg);
     if (!killed) return;
 
     let credit: Boat | null = from && from !== target ? from : target.lastHitBy;
     if (credit === target) credit = null;
+    target.respawnT = RESPAWN_SECONDS;
+    if (net) {
+      // The server keeps score and sends the kill feed back to everyone (see onFeed).
+      this.particles.explosion(target.x, target.y, target.z, true);
+      this.particles.emit(target.x, target.y + 0.5, target.z, 16, 0xb5763c, { speed: 6, up: 9, life: 1.3, size: 0.32, gravity: 20 });
+      net.send('sunk', { victim: target.netId, by: credit?.netId ?? null, w: icon });
+      return;
+    }
     if (credit && this.state === 'playing') credit.kills++;
     credit?.model.character.cheer();
-    target.respawnT = RESPAWN_SECONDS;
     this.particles.explosion(target.x, target.y, target.z, true);
     this.particles.emit(target.x, target.y + 0.5, target.z, 16, 0xb5763c, { speed: 6, up: 9, life: 1.3, size: 0.32, gravity: 20 });
     if (this.state === 'playing' || this.state === 'ended') this.ui.feed(credit, target, icon);
@@ -480,9 +560,22 @@ export class Game implements CombatHost {
     this.ui.weaponToast(weapon);
   }
 
+  boatById(id: string): Boat | undefined {
+    return this.byId.get(id);
+  }
+
+  requestPickup(b: Boat, index: number): void {
+    this.net?.send('pickup', { by: b.netId, crate: index });
+  }
+
+  onTrap(id: string): void {
+    if (this.onlineRound) this.net?.send('fx', { id });
+  }
+
   // ---------------------------------------------------------------- frame
 
   private frame(dt: number, raw: number): void {
+    if (this.net) this.pollNet();
     const running = !this.adPaused && this.state !== 'paused';
     if (running) {
       this.time += dt;
@@ -496,7 +589,10 @@ export class Game implements CombatHost {
   }
 
   private update(dt: number): void {
-    if (this.state === 'countdown') {
+    const online = this.onlineRound && this.net !== null;
+    if (online) {
+      this.tickOnlineClock(dt);
+    } else if (this.state === 'countdown') {
       this.countdown -= dt;
       const n = Math.ceil(this.countdown - 0.5);
       if (n !== this.lastCount) {
@@ -514,7 +610,8 @@ export class Game implements CombatHost {
       if (this.timeLeft <= 0) this.endMatch();
     }
 
-    const frozen = this.state === 'countdown';
+    // Online, nobody can fire or move outside the match itself (the server ignores it anyway).
+    const frozen = this.state === 'countdown' || (online && this.state !== 'playing');
     const amp = this.arena.map.waveAmp;
     if (this.player) this.input.read(this.player.input);
     for (const bot of this.bots) {
@@ -525,25 +622,47 @@ export class Game implements CombatHost {
       }
     }
 
+    const now = performance.now();
     for (const b of this.boats) {
-      if (b.alive && b.input.fire && !frozen) this.combat.useWeapon(b);
-      const impact = b.update(dt, this.arena, this.time);
-      if (impact > 5) {
-        this.particles.splash(b.x + b.forwardX * 1.2, b.y - 0.2, b.z + b.forwardZ * 1.2, Math.min(1.2, impact / 10));
-        if (b === this.player) this.shake(0.15);
+      if (b.owned) {
+        if (b.alive && b.input.fire && !frozen) {
+          const shot = this.combat.useWeapon(b);
+          if (shot && online) this.net!.send('fire', shot);
+        }
+        const impact = b.update(dt, this.arena, this.time);
+        if (impact > 5) {
+          this.particles.splash(b.x + b.forwardX * 1.2, b.y - 0.2, b.z + b.forwardZ * 1.2, Math.min(1.2, impact / 10));
+          if (b === this.player) this.shake(0.15);
+        }
+        if (!b.alive && b.respawnT <= 0) this.respawn(b);
+      } else {
+        // Another player's boat (or a bot simulated by someone else): follow its network poses.
+        if (!b.hasSnapshots) continue;
+        if (b.updateRemote(dt, this.arena, this.time, now)) {
+          this.wakes.get(b.id)?.reset();
+          this.particles.splash(b.x, 0.2, b.z, 1.4);
+          this.particles.sparkle(b.x, 1, b.z, 0xbff4ff);
+        }
       }
-      if (!b.alive && b.respawnT <= 0) this.respawn(b);
       this.wakes.get(b.id)?.update(dt, b, this.time, amp);
       // Propeller churn behind the outboard motor while the throttle is open.
-      if (b.alive && Math.abs(b.input.throttle) > 0.1 && Math.random() < 0.35) {
+      const thr = b.throttleAmount;
+      if (b.alive && Math.abs(thr) > 0.1 && Math.random() < 0.35) {
         this.particles.emit(b.x - b.forwardX * 1.55, b.y - 0.45, b.z - b.forwardZ * 1.55, 1, 0xf2fbff, {
-          dirX: -b.forwardX * Math.sign(b.input.throttle), dirZ: -b.forwardZ * Math.sign(b.input.throttle),
+          dirX: -b.forwardX * Math.sign(thr), dirZ: -b.forwardZ * Math.sign(thr),
           speed: 2.5, up: 1.4, life: 0.4, size: 0.28, gravity: 6, alpha: 0.85,
         });
       }
     }
     this.collideBoats();
+    if (online) {
+      const net = this.net!;
+      this.combat.lag = Math.min(0.4, (INTERP_DELAY_MS + net.rtt) / 1000);
+      const taken = net.state.taken;
+      this.combat.syncCrates((i) => taken.has(String(i)));
+    }
     this.combat.update(dt);
+    if (online) this.sendPoses(dt);
     this.arena.update(this.time);
     this.water.update(this.time);
     this.updateShowcase(dt);
@@ -571,25 +690,34 @@ export class Game implements CombatHost {
       if (!a.alive) continue;
       for (let j = i + 1; j < bs.length; j++) {
         const b = bs[j];
-        if (!b.alive) continue;
+        // Online, each machine only moves its own boats; other players' boats act as solid obstacles.
+        if (!b.alive || (!a.owned && !b.owned)) continue;
         const dx = b.x - a.x, dz = b.z - a.z;
         const min = a.radius + b.radius;
         const d2 = dx * dx + dz * dz;
         if (d2 >= min * min) continue;
         const d = Math.sqrt(d2) || 0.001;
         const nx = dx / d, nz = dz / d;
-        const push = (min - d) / 2;
-        a.x -= nx * push;
-        a.z -= nz * push;
-        b.x += nx * push;
-        b.z += nz * push;
+        const push = (min - d) / (a.owned && b.owned ? 2 : 1);
+        if (a.owned) {
+          a.x -= nx * push;
+          a.z -= nz * push;
+        }
+        if (b.owned) {
+          b.x += nx * push;
+          b.z += nz * push;
+        }
         const rel = (b.vx - a.vx) * nx + (b.vz - a.vz) * nz;
         if (rel >= 0) continue;
         const imp = (-rel * (1 + BOAT.boatRestitution)) / 2; // equal masses
-        a.vx -= nx * imp;
-        a.vz -= nz * imp;
-        b.vx += nx * imp;
-        b.vz += nz * imp;
+        if (a.owned) {
+          a.vx -= nx * imp;
+          a.vz -= nz * imp;
+        }
+        if (b.owned) {
+          b.vx += nx * imp;
+          b.vz += nz * imp;
+        }
         if (-rel > 2) this.particles.splash((a.x + b.x) / 2, a.y - 0.1, (a.z + b.z) / 2, Math.min(1, -rel / 10));
       }
     }
@@ -599,6 +727,350 @@ export class Game implements CombatHost {
     return this.boats
       .map((b) => ({ name: b.name, color: b.color, kills: b.kills, deaths: b.deaths, isPlayer: b.isPlayer }))
       .sort((a, b) => b.kills - a.kills || a.deaths - b.deaths || Number(b.isPlayer) - Number(a.isPlayer));
+  }
+
+  // ---------------------------------------------------------------- online
+
+  private async goOnline(kind: 'quick' | 'create' | 'join', cfg: PlayConfig, code?: string): Promise<void> {
+    if (this.net || this.state !== 'menu') return;
+    Sfx.unlock();
+    Sfx.click();
+    this.lastCfg = cfg;
+    this.savePrefs(cfg);
+    const seq = ++this.connectSeq;
+    this.ui.showConnecting(kind === 'join' ? `Joining room ${code}…` : kind === 'create' ? 'Creating your room…' : 'Finding a match…');
+    const profile = { name: cfg.name || 'Captain', color: cfg.color, character: cfg.character };
+    try {
+      // The networking code loads on first use, so it doesn't weigh on the initial download.
+      const { NetSession } = await import('../net/NetSession');
+      const net =
+        kind === 'quick'
+          ? await NetSession.quickPlay(profile)
+          : kind === 'create'
+            ? await NetSession.create(profile, { map: cfg.map, arsenal: cfg.arsenal, bots: true })
+            : await NetSession.join(code ?? '', profile);
+      // Cancelled (or started something else) while connecting.
+      if (seq !== this.connectSeq || this.state !== 'menu' || this.net) {
+        net.leave();
+        return;
+      }
+      this.enterOnline(net);
+    } catch (e) {
+      if (import.meta.env.DEV) console.warn('[net]', e);
+      const text = await import('../net/NetSession').then((m) => m.friendlyError(e), () => "Can't load online play right now. Check your connection.");
+      if (seq === this.connectSeq) this.ui.showError(text);
+    }
+  }
+
+  private enterOnline(net: NetSession): void {
+    this.net = net;
+    this.netRound = -1;
+    this.netPhase = null;
+    this.menuOpen = false;
+    net.bind({
+      pose: (list) => this.onPoses(list),
+      fire: (m) => this.onRemoteFire(m),
+      fx: (m) => this.onlineRound && this.combat.triggerTrap(m.id),
+      hit: (m) => this.onRemoteHit(m),
+      gave: (m) => this.onGave(m),
+      feed: (m) => this.onFeed(m),
+      notice: (m) => this.ui.info(m.text),
+      lost: () => this.leaveOnline('Lost connection to the game server.'),
+    });
+  }
+
+  /** Leaves the room. With `lost` set it's a disconnect: back to the menu with that message. */
+  private leaveOnline(lost?: string): void {
+    const net = this.net;
+    if (!net) return;
+    this.net = null;
+    this.connectSeq++;
+    net.leave();
+    CrazyGames.hideInviteButton();
+    this.menuOpen = false;
+    if (lost) {
+      this.toMenu();
+      this.ui.showError(lost);
+    } else {
+      void this.afterMatch(() => this.toMenu());
+    }
+  }
+
+  /** Follows the server's room state: phases, rounds, who's in the room. */
+  private pollNet(): void {
+    const net = this.net!;
+    if (!net.ready) return;
+    const s = net.state;
+    if ((s.phase === 'countdown' || s.phase === 'playing') && s.round !== this.netRound) this.beginOnlineRound();
+    if (s.phase !== this.netPhase) {
+      this.netPhase = s.phase;
+      this.onPhase(s.phase);
+    }
+    if (!this.net) return;
+    if (this.onlineRound) this.syncRoster(false);
+    if (this.state === 'lobby') this.refreshLobby();
+  }
+
+  private onPhase(phase: Phase): void {
+    const s = this.net!.state;
+    const inMatch = this.onlineRound && this.netRound === s.round;
+    if (phase === 'playing' && inMatch && this.state === 'countdown') {
+      this.state = 'playing';
+      this.input.enabled = !this.menuOpen;
+      this.ui.countdown(0);
+      Sfx.countdown(true);
+    } else if (phase === 'results') {
+      if (inMatch) this.endOnlineMatch();
+      else this.enterLobby();
+    } else if (phase === 'lobby') {
+      this.enterLobby();
+    }
+  }
+
+  /** A match is starting (or already running when we joined): build the arena and everyone's boats. */
+  private beginOnlineRound(): void {
+    const s = this.net!.state;
+    const joinedLate = s.phase === 'playing';
+    this.netRound = s.round;
+    this.menuOpen = false;
+    this.clearShowcase();
+    this.loadMap(s.map in MAPS ? (s.map as MapId) : 'pond');
+    this.combat.setArsenal(s.arsenal.split(',') as WeaponId[]);
+    this.combat.online = true;
+    this.onlineRound = true;
+    this.player = null;
+    this.syncRoster(true);
+    const me = this.player as Boat | null; // set by syncRoster
+    if (joinedLate && me) me.protectT = SPAWN_PROTECTION_SECONDS;
+    this.timeLeft = joinedLate ? s.timeLeft : MATCH_SECONDS;
+    this.countdown = s.countdown;
+    this.lastCount = -1;
+    this.poseT = 0;
+    this.state = joinedLate ? 'playing' : 'countdown';
+    this.input.enabled = joinedLate;
+    this.input.showTouch(true);
+    this.input.setFireIcon(null);
+    this.ui.showHud();
+    CrazyGames.hideInviteButton();
+    this.resize();
+    this.snapCamera();
+    CrazyGames.gameplayStart();
+  }
+
+  /** Adds/removes boats as players come and go, and hands bots to whoever simulates them. */
+  private syncRoster(initial: boolean): void {
+    const net = this.net!;
+    const s = net.state;
+    const me = net.myId;
+    const hostBots = s.botHostId === me;
+    for (const [id, b] of this.byId) {
+      if (s.players.has(id)) continue;
+      this.removeBoat(b);
+      if (!b.netId.startsWith('bot-')) this.ui.info(`${b.name} left`);
+    }
+    s.players.forEach((p, id) => {
+      let b = this.byId.get(id);
+      if (!b) {
+        b = this.addNetBoat(p, initial);
+        if (!initial && !p.isBot && id !== me) this.ui.info(`${p.name} joined`);
+      }
+      b.kills = p.kills;
+      b.deaths = p.deaths;
+      if (p.isBot && hostBots && !b.owned) this.adoptBot(b, p);
+      else if (p.isBot && !hostBots && b.owned) {
+        b.owned = false;
+        this.bots = this.bots.filter((x) => x.boat !== b);
+      }
+    });
+  }
+
+  private addNetBoat(p: PlayerView, initial: boolean): Boat {
+    const net = this.net!;
+    const mine = p.id === net.myId;
+    const b = new Boat(p.name, p.color, mine, speciesById(p.character).id);
+    b.netId = p.id;
+    b.owned = mine || (p.isBot && net.state.botHostId === net.myId);
+    this.register(b);
+    if (mine) this.player = b;
+    if (b.owned) {
+      this.spawnOwned(b, p, initial);
+      if (p.isBot) this.bots.push(new BotBrain(b, 0.45 + Math.random() * 0.45));
+    } else {
+      b.model.root.visible = false; // until its first pose arrives
+    }
+    return b;
+  }
+
+  /** Round start: the server's spawn slot. Joining later: the spot furthest from the action. */
+  private spawnOwned(b: Boat, p: PlayerView, initial: boolean): void {
+    if (initial) {
+      const spots = this.arena.spawnPoints;
+      const s = spots[p.spawn % spots.length];
+      b.spawn(s.x, s.z, s.heading);
+    } else {
+      this.respawn(b);
+    }
+    b.update(0, this.arena, this.time);
+  }
+
+  /** This machine became the bot host (the previous one left): carry on from the bot's last pose. */
+  private adoptBot(b: Boat, p: PlayerView): void {
+    if (b.hasSnapshots) b.takeOver();
+    else {
+      b.owned = true;
+      this.spawnOwned(b, p, false);
+    }
+    this.bots.push(new BotBrain(b, 0.45 + Math.random() * 0.45));
+  }
+
+  private tickOnlineClock(dt: number): void {
+    const s = this.net!.state;
+    if (this.state === 'countdown') {
+      // Run the clock locally between server updates, snapping back if it drifts.
+      this.countdown = Math.max(0, this.countdown - dt);
+      if (Math.abs(this.countdown - s.countdown) > 0.3) this.countdown = s.countdown;
+      const n = Math.ceil(this.countdown);
+      if (n !== this.lastCount) {
+        if (n > 3 && this.lastCount === -1) this.ui.getReady(MAPS[this.mapId!].name);
+        else if (n > 0 && n <= 3) {
+          this.ui.countdown(n);
+          Sfx.countdown(false);
+        }
+        this.lastCount = n;
+      }
+    } else if (this.state === 'playing') {
+      this.timeLeft = Math.max(0, this.timeLeft - dt);
+      if (Math.abs(this.timeLeft - s.timeLeft) > 0.5) this.timeLeft = s.timeLeft;
+    } else if (this.state === 'ended') {
+      const n = Math.max(0, Math.ceil(s.resultsLeft));
+      this.ui.setEndNote(s.isPrivate ? `Back to the room in ${n}…` : `Next match starts in ${n}…`);
+    }
+  }
+
+  private endOnlineMatch(): void {
+    this.syncRoster(false);
+    this.state = 'ended';
+    this.menuOpen = false;
+    this.ui.showPause(false, this.quality);
+    this.input.enabled = false;
+    this.input.showTouch(false);
+    CrazyGames.gameplayStop();
+    const rows = this.scoreRows();
+    const rank = rows.findIndex((r) => r.isPlayer) + 1;
+    this.recordResult(rank, false);
+    this.ui.showEnd(rows, rank, true);
+  }
+
+  /** Between matches in a private room (or waiting for the next public one). */
+  private enterLobby(): void {
+    const s = this.net!.state;
+    this.state = 'lobby';
+    this.menuOpen = false;
+    this.input.enabled = false;
+    this.input.showTouch(false);
+    CrazyGames.gameplayStop();
+    this.loadLobbyBackdrop(s.map in MAPS ? (s.map as MapId) : 'pond');
+    this.ui.showLobby(this.lobbyView());
+    if (s.isPrivate) CrazyGames.showInviteButton(s.code);
+    this.resize();
+  }
+
+  /** The menu-style scene behind the lobby: the room's waters with your boat in front. */
+  private loadLobbyBackdrop(map: MapId): void {
+    const net = this.net!;
+    const me = net.state.players.get(net.myId);
+    this.loadMap(map);
+    this.populate(null);
+    this.buildShowcase(me?.color ?? this.ui.config.color, speciesById(me?.character ?? this.ui.config.character).id);
+  }
+
+  private refreshLobby(): void {
+    const s = this.net!.state;
+    if (s.map !== this.mapId && s.map in MAPS) this.loadLobbyBackdrop(s.map as MapId);
+    this.ui.updateLobby(this.lobbyView());
+  }
+
+  private lobbyView(): LobbyView {
+    const net = this.net!;
+    const s = net.state;
+    const me = net.myId;
+    const players: LobbyView['players'] = [];
+    s.players.forEach((p) =>
+      players.push({ name: p.name, color: p.color, isBot: p.isBot, isHost: s.isPrivate && p.id === s.hostId, isMe: p.id === me }),
+    );
+    players.sort((a, b) => Number(a.isBot) - Number(b.isBot));
+    const isHost = s.hostId === me;
+    const humans = players.filter((p) => !p.isBot).length;
+    let status: string;
+    if (!s.isPrivate) status = s.phase === 'results' ? `Next match starts in ${Math.max(0, Math.ceil(s.resultsLeft))}…` : 'Starting…';
+    else if (s.phase !== 'lobby') status = 'Their match is finishing, hang tight…';
+    else if (!isHost) status = 'Waiting for the host to start the match…';
+    else if (humans > 1) status = 'Everyone ready? Press START!';
+    else status = s.bots ? 'Share the code with friends, or START now vs bots!' : 'Share the code with friends to play together.';
+    return {
+      code: s.code,
+      isPrivate: s.isPrivate,
+      isHost,
+      map: (s.map in MAPS ? s.map : 'pond') as MapId,
+      arsenal: s.arsenal.split(',').filter((id): id is WeaponId => id in WEAPONS),
+      bots: s.bots,
+      players,
+      status,
+      canStart: s.isPrivate && isHost && s.phase === 'lobby',
+    };
+  }
+
+  private sendPoses(dt: number): void {
+    this.poseT -= dt;
+    if (this.poseT > 0) return;
+    this.poseT = Math.max(0, this.poseT + 1 / POSE_HZ);
+    const list: PoseMsg[] = [];
+    for (const b of this.boats) if (b.owned) list.push(b.pose());
+    if (list.length) this.net!.send('pose', list);
+  }
+
+  private onPoses(list: PoseMsg[]): void {
+    if (!this.onlineRound) return;
+    const now = performance.now();
+    for (const p of list) {
+      const b = this.byId.get(p?.id);
+      if (b && !b.owned) b.pushSnapshot(p, now);
+    }
+  }
+
+  private onRemoteFire(m: FireMsg): void {
+    const b = this.onlineRound ? this.byId.get(m?.by) : undefined;
+    if (!b || b.owned || !(m.w in WEAPONS) || !Array.isArray(m.p)) return;
+    // The shot left its owner about one round trip ago: fast-forward it (capped so it never skips a hit).
+    this.combat.applyFire(m, b, Math.min(0.15, this.net!.rtt / 1000));
+  }
+
+  private onRemoteHit(m: HitMsg): void {
+    const v = this.onlineRound ? this.byId.get(m?.victim) : undefined;
+    if (!v || v.owned) return;
+    v.showHit(m.hp, v.hp - m.hp);
+    this.particles.emit(v.x, v.y + 0.8, v.z, 8, 0xffffff, { glow: true, speed: 5, up: 4, life: 0.35, size: 0.4 });
+  }
+
+  private onGave(m: GaveMsg): void {
+    if (this.onlineRound) this.combat.grant(m.crate, this.byId.get(m.by) ?? null, m.weapon as WeaponId);
+  }
+
+  private onFeed(m: FeedMsg): void {
+    const victim = this.onlineRound ? this.byId.get(m?.victim) : undefined;
+    if (!victim) return;
+    const killer = (m.killer && this.byId.get(m.killer)) || null;
+    // Our own boats already blew up locally (damage()); others' explode when the news arrives.
+    if (!victim.owned) {
+      this.particles.explosion(victim.x, victim.y, victim.z, true);
+      this.particles.emit(victim.x, victim.y + 0.5, victim.z, 16, 0xb5763c, { speed: 6, up: 9, life: 1.3, size: 0.32, gravity: 20 });
+    }
+    killer?.model.character.cheer();
+    if (this.state === 'playing' || this.state === 'ended') this.ui.feed(killer, victim, m.w);
+    if (killer && killer === this.player && victim !== killer) {
+      Sfx.kill();
+      this.ui.killBanner(victim.name);
+    }
   }
 
   // ---------------------------------------------------------------- camera & sun
@@ -613,7 +1085,7 @@ export class Game implements CombatHost {
   private updateCamera(dt: number, snap = false): void {
     const cam = this.camera;
     const p = this.player;
-    if (!p || this.state === 'menu') {
+    if (!p || this.state === 'menu' || this.state === 'lobby') {
       const s = this.showcaseSpot;
       const y = waveHeight(s.x, s.z, this.time, this.arena.map.waveAmp);
       this.camPos.set(s.camX, 2.6 + y * 0.3, s.camZ);
@@ -671,8 +1143,9 @@ export class Game implements CombatHost {
     const w = window.innerWidth, h = window.innerHeight;
     this.renderer.setSize(w, h, false);
     this.camera.aspect = w / h;
-    // On wide screens the menu card sits on the left: shift the 3D showcase to the right.
-    if (this.state === 'menu' && w / h > 1.25) this.camera.setViewOffset(w, h, -w * 0.17, 0, w, h);
+    // On wide screens the menu card sits on the left: centre the 3D showcase in the space beside it.
+    const right = this.state === 'menu' || this.state === 'lobby' ? this.ui.panelRight : 0;
+    if (w / h > 1.25 && right > 0 && right < w * 0.7) this.camera.setViewOffset(w, h, -right / 2, 0, w, h);
     else this.camera.clearViewOffset();
     this.camera.updateProjectionMatrix();
     this.particles.setViewport(this.renderer.domElement.height, this.camera.fov);

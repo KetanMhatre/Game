@@ -1,6 +1,6 @@
 # Nutshell Navy
 
-Browser arena brawler on the water: steer motorised nutshell boats around a pond, lake or sea, grab floating crates for weapons, and sink as many rivals as you can in 3 minutes.
+Browser arena brawler on the water: steer motorised nutshell boats around a pond, lake or sea, grab floating crates for weapons, and sink as many rivals as you can in 3 minutes. Play online (quick play or private rooms with friends) or offline against bots.
 
 Built for **CrazyGames** (HTML5 / WebGL).
 
@@ -8,12 +8,16 @@ Built for **CrazyGames** (HTML5 / WebGL).
 
 ```bash
 npm install
-npm run dev        # http://localhost:5173
+npm run dev        # game: http://localhost:5173
+
+# second terminal: the multiplayer server (only needed for online play)
+cd server && npm install && npm run dev     # ws://localhost:2567
+
 npm run build      # production build → dist/
 npm run zip        # build + nutshell-navy.zip ready to upload
 ```
 
-Dev-only URL params: `?autoplay=pond|lake|sea` skips the menu, `?time=30` shortens the match, `?quality=high|low|auto` pins graphics quality.
+Dev-only URL params: `?autoplay=pond|lake|sea` skips the menu, `?time=30` shortens a solo match, `?quality=high|low|auto` pins graphics quality, `?room=ABCDE` joins that private room. `MATCH_SECONDS=30 npm run dev` (in `server/`) shortens online matches.
 
 ## Tech stack (and why)
 
@@ -45,16 +49,56 @@ Dev-only URL params: `?autoplay=pond|lake|sea` skips the menu, `?time=30` shorte
   - If the frame rate stays under 45 fps, it lowers the resolution and the shadow quality, and finally turns shadows off.
 - **UI:** chunky outlined panels, the bundled *Lilita One* and *Fredoka* fonts, and inline SVG icons. There are no emoji because newer ones render as boxes on older Windows and ChromeOS.
 
+## Multiplayer
+
+The flow follows the usual kart-brawler pattern:
+
+- **PLAY ONLINE (Quick Play):** joins a public room with free seats, or opens a new one. Matches start right away and run back to back: 3 minutes, 10 s of results, then the next map in the rotation (pond → lake → sea). You can join mid-match (with spawn protection). Bots fill every empty seat and step aside as real players arrive (8 boats per room).
+- **Create Room:** a private room with a 5-letter code (no look-alike letters). The host picks the waters, the arsenal and bots on/off in the room lobby, then presses START. After each match everyone returns to the lobby. Share the code, or the **Invite link** (a CrazyGames invite link on CrazyGames, `?room=CODE` elsewhere).
+- **Join Room:** type the code, or open an invite link to go straight in.
+- **Practice offline:** the original solo mode against bots, no server needed.
+
+**How it works.** The server (`server/`, [Colyseus](https://colyseus.io)) is the referee and a relay. It runs the phases and the timer, keeps score, hands out crate weapons (first come, first served), fills seats with bots and moves the host role if the host leaves. Each player's browser simulates their own boat; one player per room (the *bot host*) also simulates the bots. Boats send their position 15 times a second, and other screens draw them 110 ms in the past, blending between updates so movement looks smooth. Every shot is planned once by the shooter (aim, target, spread), sent to everyone, and replayed identically on every screen, fast-forwarded by the network delay. Each screen applies damage, knockback, stuns and pulls only to its own boats, so **what you see hit you is what hurts you**. The victim's screen then reports hits and sinkings, and the server scores them.
+
+- **Shared code:** `shared/protocol.ts` (messages and constants, used by both sides). The server also imports `src/game/config.ts`, so weapon weights, match length and colours stay in sync.
+- **Versioning:** bump `PROTOCOL_VERSION` whenever messages change. Old clients are told to refresh instead of joining with a mismatched protocol.
+- **Load time:** the client's networking code (`src/net/NetSession.ts`, about 56 KB gzipped) loads only when a player first goes online.
+
+### Deploying the server
+
+CrazyGames serves the game over HTTPS, so the server needs a public **`wss://`** address.
+
+1. Host it anywhere that runs a long-lived Node process with WebSockets (Fly.io, Render, Railway, a small VPS behind Caddy/nginx, or Colyseus Cloud). One small instance handles many rooms.
+   - **Docker:** from the repo root, run `docker build -f server/Dockerfile -t nutshell-navy-server .`. The container listens on `PORT` (default 2567).
+   - **Without Docker:** `cd server && npm ci && npm start`.
+2. Put the address in `.env` as `VITE_GAME_SERVER_URL=wss://your-server.example.com`, then `npm run build` / `npm run zip`. Without it, the game connects to port 2567 on the same host it's served from, which is what you want in local development and LAN tests.
+3. Testing with friends on your Wi-Fi: run `npm run dev` and the server, then open `http://<your-computer's-LAN-IP>:5173` on the other devices.
+
+### Share a test link with friends (Cloudflare quick tunnel)
+
+No account or deploy needed. The link lasts while these keep running, and you get a new link each time.
+
+```bash
+cd server && npm run dev                        # terminal 1: game server
+npm run build && npx vite preview --port 4173   # terminal 2: the game (production build)
+cloudflared tunnel --url http://localhost:4173  # terminal 3: prints https://<random>.trycloudflare.com
+```
+
+Online play goes through the same link (`/net` is forwarded to the game server, see `vite.config.ts`). Install cloudflared once with `brew install cloudflared`. Google sign-in only works on that link after you add its domain under Firebase → Authentication → Authorized domains. Guest play and email sign-in work without that.
+
 ## Project layout
 
 ```
+shared/protocol.ts     messages + constants shared by game and server
+server/                Colyseus server: index.ts (entry), NutshellRoom.ts (match flow, relay, scoring), state.ts
 src/
-  main.ts              boot: SDK init → UI → Game
+  main.ts              boot: SDK init → UI → Game (+ auto-join from invite links)
+  net/NetSession.ts    client connection: quick play / create / join, message wiring, ping
   sdk/crazygames.ts    SDK v3 wrapper (loading, gameplay events, ads, user, data)
   game/
     config.ts          ALL tuning: maps, weapons, speeds, match length
-    Game.ts            state machine, loop, camera, lights/shadows, quality, menu showcase, scoring
-    Boat.ts            boat entity: input → physics, wave riding, HP, name tag
+    Game.ts            state machine, loop, camera, lights/shadows, quality, menu showcase, scoring, online rounds
+    Boat.ts            boat entity: input → physics, wave riding, HP, name tag, network poses + interpolation
     BoatModel.ts       nutshell boat (matches assets/boat-reference.png) + bubble shield
     Character.ts       big-head cartoon sailors (8 characters) and their animation
     Arena.ts           shoreline, terrain, islands, props, decor batching, collisions, land-distance field
@@ -63,7 +107,7 @@ src/
     Wake.ts            foam wake ribbons
     waves.ts           wave function shared by GPU shader and CPU bobbing
     Models.ts          weapon, crate, drone and whirlpool models
-    Combat.ts          weapon dispatch, aim assist, damage/blast helpers, crates, arsenal pool
+    Combat.ts          shot planning/replay, aim assist (with lag lead), damage/blast helpers, crates, arsenal pool
     weapons/           one class per live weapon object: bullets, projectiles (torpedo, cannonball,
                        mortar, harpoon), traps (mine, fake crate, depth charge), specials (maelstrom, flail, drone)
     Bot.ts             AI: grab barrel → hunt → avoid obstacles → unstick
@@ -71,7 +115,7 @@ src/
     Particles.ts       soft sprite particles (normal + glow layers)
     Audio.ts           synthesized SFX
     render/            GeoBuilder (mesh merging), procedural textures, shared materials
-  ui/UI.ts             DOM menu, HUD, pause, results
+  ui/UI.ts             DOM menu, room lobby, join/connecting dialogs, HUD, pause, results
   ui/icons.ts          SVG icon set
   assets/fonts/        Lilita One + Fredoka (SIL Open Font License)
 ```
@@ -126,15 +170,17 @@ Already done:
 - [x] Saves progress through the SDK data module (falls back to localStorage)
 - [x] Relative asset paths, no external links, keyboard and touch controls
 - [x] Arrow keys and Space don't scroll the iframe
+- [x] Multiplayer invites: `inviteLink` for the room's invite link, `getInviteParam('roomId')` to join from an invite, the portal invite button while in a private lobby, and instant multiplayer (straight into Quick Play)
 
 Before submitting:
+- [ ] Deploy the multiplayer server and build with `VITE_GAME_SERVER_URL` set (see Deploying the server)
 - [ ] Test with the CrazyGames SDK QA tool: upload `dist/` to the Developer Portal preview, which serves it in `crazygames` environment
 - [ ] Add cover art (CrazyGames asks for 1920×1080, 800×450 and 800×1200 covers) and a gameplay video
 - [ ] Optional: rewarded ad (`CrazyGames.rewardedAd()` is ready). For example "watch an ad to start with a weapon"
 
 ## Roadmap
 
-1. **Online multiplayer**: [Colyseus](https://colyseus.io) (Node) authoritative server, with rooms of 8 and bots filling empty slots. Boats are already driven only through a plain `BoatInput` object (`Boat.ts`), so clients send inputs and the server runs the same `Boat`/`Combat` simulation. Use CrazyGames `inviteLink` / instant multiplayer for party invites.
+1. Multiplayer polish: reconnect after a short drop (`allowReconnection`), kick idle players, and region servers if players spread worldwide.
 2. Artist-made GLB boat. Swap the meshes in `BoatModel.ts` and keep the +Z-forward orientation.
 3. Cosmetics and XP: unlockable hulls, sailors and flags, saved through the SDK data module.
 4. More maps (river delta, frozen lake with ice floes, swamp with whirlpools).

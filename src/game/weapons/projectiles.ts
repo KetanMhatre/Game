@@ -231,10 +231,12 @@ export class Harpoon implements WeaponFx {
   constructor(
     private c: Combat,
     private owner: Boat,
+    x: number,
+    z: number,
     private heading: number,
   ) {
-    this.x = owner.x + Math.sin(heading) * 1.5;
-    this.z = owner.z + Math.cos(heading) * 1.5;
+    this.x = x;
+    this.z = z;
     this.y = owner.y + 0.3;
     c.group.add(this.mesh, this.rope);
   }
@@ -255,7 +257,7 @@ export class Harpoon implements WeaponFx {
       if (hit) {
         if (c.hit(hit, H.damage, o, 'harpoon')) {
           this.victim = hit;
-          hit.stunT = H.stun;
+          if (hit.owned) hit.stunT = H.stun;
           this.state = 'pull';
           this.t = 0;
           c.host.particles.emit(this.x, this.y, this.z, 6, 0xffd27a, { glow: true, speed: 4, up: 3, life: 0.25, size: 0.4 });
@@ -276,9 +278,12 @@ export class Harpoon implements WeaponFx {
       this.z = v.z;
       const dx = o.x - v.x, dz = o.z - v.z;
       const d = Math.hypot(dx, dz) || 1;
-      if (v.alive && !v.invulnerable) {
+      // Only boats simulated on this machine are moved (online, each player pulls their own boat).
+      if (v.alive && !v.invulnerable && v.owned) {
         v.vx += (dx / d) * H.pull * dt;
         v.vz += (dz / d) * H.pull * dt;
+      }
+      if (v.alive && !v.invulnerable && o.owned) {
         o.vx -= (dx / d) * H.pull * 0.15 * dt;
         o.vz -= (dz / d) * H.pull * 0.15 * dt;
       }
